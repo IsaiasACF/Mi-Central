@@ -1,0 +1,101 @@
+name: mi-central
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    ports:
+      - "8080:80"
+    environment:
+      APP_NAME: ${APP_NAME:-Mi Central}
+      APP_ENV: ${APP_ENV:-development}
+      APP_DEBUG: ${APP_DEBUG:-true}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santiago}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:-mi_central}
+      DB_USERNAME: ${DB_USERNAME:-mi_central}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      SESSION_NAME: ${SESSION_NAME:-mi_central_session}
+      SESSION_SECURE: ${SESSION_SECURE:-false}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
+      FFMPEG_BIN: ${FFMPEG_BIN:-/usr/bin/ffmpeg}
+      FFPROBE_BIN: ${FFPROBE_BIN:-/usr/bin/ffprobe}
+      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
+      WHISPER_MODELS_PATH: ${WHISPER_MODELS_PATH:-/var/www/html/storage/models/whisper}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/var/www/html/storage/models/whisper/ggml-base.bin}
+      VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - mi-central-private
+
+  db:
+    image: mariadb:11.8
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-mi_central}
+      MARIADB_USER: ${DB_USERNAME:-mi_central}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    command: ["mariadbd", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - mi-central-private
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    environment:
+      APP_NAME: ${APP_NAME:-Mi Central}
+      APP_ENV: ${APP_ENV:-development}
+      APP_DEBUG: ${APP_DEBUG:-true}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santiago}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:-mi_central}
+      DB_USERNAME: ${DB_USERNAME:-mi_central}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      SESSION_NAME: ${SESSION_NAME:-mi_central_session}
+      SESSION_SECURE: ${SESSION_SECURE:-false}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
+      FFMPEG_BIN: ${FFMPEG_BIN:-/usr/bin/ffmpeg}
+      FFPROBE_BIN: ${FFPROBE_BIN:-/usr/bin/ffprobe}
+      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
+      WHISPER_MODELS_PATH: ${WHISPER_MODELS_PATH:-/var/www/html/storage/models/whisper}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/var/www/html/storage/models/whisper/ggml-base.bin}
+      VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    volumes:
+      - ./:/var/www/html
+    working_dir: /var/www/html
+    command: ["sh", "/var/www/html/docker/worker/start-cron.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - mi-central-private
+
+networks:
+  mi-central-private:
+    driver: bridge
+
+volumes:
+  mariadb-data:

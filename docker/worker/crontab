@@ -1,0 +1,8 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-reminders.php >> /var/www/html/storage/logs/reminders-worker.log 2>&1
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-metadata.php >> /var/www/html/storage/logs/video-metadata-worker.log 2>&1
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-exports.php >> /var/www/html/storage/logs/video-exports-worker.log 2>&1
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-transcriptions.php >> /var/www/html/storage/logs/video-transcriptions-worker.log 2>&1
+17 2 * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/cleanup-video-files.php >> /var/www/html/storage/logs/video-cleanup-worker.log 2>&1
