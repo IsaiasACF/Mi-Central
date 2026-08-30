@@ -137,6 +137,7 @@ try {
         'space_id' => $spaceId,
     ]);
     notes_assert((int) $note['space_id'] === $spaceId, 'Note was not associated with its space.');
+    notes_assert(($note['status'] ?? '') === 'active', 'New note was not active by default.');
 
     $noSpaceNote = $noteService->create($userId, [
         'title' => 'Nota sin espacio',
@@ -154,6 +155,13 @@ try {
     $filtered = $noteService->list($userId, ['space_id' => $spaceId]);
     notes_assert(count($filtered) === 1 && $filtered[0]['title'] === 'Nota Universidad', 'Note space filter failed.');
 
+    $completed = $noteService->complete($userId, (int) $note['id']);
+    notes_assert($completed !== null && $completed['status'] === 'completed' && $completed['completed_at'] !== null, 'Note complete failed.');
+    notes_assert(count($noteService->list($userId, ['status' => 'active'])) === 1, 'Active note filter included completed note.');
+
+    $reopened = $noteService->reopen($userId, (int) $note['id']);
+    notes_assert($reopened !== null && $reopened['status'] === 'active' && $reopened['completed_at'] === null, 'Note reopen failed.');
+
     $updated = $noteService->update($userId, (int) $note['id'], [
         'title' => 'Nota editada',
         'content' => 'Contenido editado',
@@ -169,9 +177,9 @@ try {
     ], $cookieFile);
     notes_assert($login['status'] === 302, 'Test user could not log in.');
 
-    $notesPage = notes_request('http://127.0.0.1/index.php?section=organization&tab=notes&status=all', 'GET', null, $cookieFile);
+    $notesPage = notes_request('http://127.0.0.1/index.php?section=organization&tab=notes', 'GET', null, $cookieFile);
     notes_assert($notesPage['status'] === 200, 'Notes page did not load.');
-    notes_assert(str_contains($notesPage['body'], 'Notas') && str_contains($notesPage['body'], 'data-note-form'), 'Notes UI was not rendered.');
+    notes_assert(str_contains($notesPage['body'], 'Notas') && str_contains($notesPage['body'], 'data-note-form') && str_contains($notesPage['body'], 'data-note-action="complete"'), 'Notes UI was not rendered.');
     notes_assert(str_contains($notesPage['body'], 'Nota editada'), 'Own note was not shown.');
     notes_assert(!str_contains($notesPage['body'], 'Nota de otro usuario'), 'Another user note was visible.');
 
@@ -197,6 +205,13 @@ try {
         $csrfHeader
     );
     notes_assert($patch['status'] === 200 && $patch['json']['data']['space_id'] === null, 'Note API update failed.');
+
+    $apiComplete = notes_request('http://127.0.0.1/api/organization/notes.php?id=' . $apiNoteId . '&action=complete', 'POST', [], $cookieFile, $csrfHeader);
+    notes_assert($apiComplete['status'] === 200 && $apiComplete['json']['data']['status'] === 'completed', 'Note API complete failed.');
+    $apiCompletedList = notes_request('http://127.0.0.1/api/organization/notes.php?status=completed', 'GET', null, $cookieFile);
+    notes_assert($apiCompletedList['status'] === 200 && count($apiCompletedList['json']['data']) === 1, 'Note API status filter failed.');
+    $apiReopen = notes_request('http://127.0.0.1/api/organization/notes.php?id=' . $apiNoteId . '&action=reopen', 'POST', [], $cookieFile, $csrfHeader);
+    notes_assert($apiReopen['status'] === 200 && $apiReopen['json']['data']['status'] === 'active', 'Note API reopen failed.');
 
     $delete = notes_request('http://127.0.0.1/api/organization/notes.php?id=' . $apiNoteId, 'DELETE', [], $cookieFile, $csrfHeader);
     notes_assert($delete['status'] === 200 && $delete['json']['data']['deleted'] === true, 'Note API delete failed.');

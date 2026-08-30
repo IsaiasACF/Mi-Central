@@ -2,17 +2,19 @@
 declare(strict_types=1);
 
 use App\Http\Csrf;
+use App\Support\DateTimeHelper;
 use App\Support\View;
 
 $videos = is_array($videos ?? null) ? $videos : [];
 $selectedVideo = is_array($selectedVideo ?? null) ? $selectedVideo : null;
 $videoNotFound = (bool) ($videoNotFound ?? false);
 $videoMode = is_string($videoMode ?? null) ? $videoMode : 'list';
+$activeVideoTab = $videoMode === 'processed' ? 'processings' : 'editor';
 $videoCutPoints = is_array($videoCutPoints ?? null) ? $videoCutPoints : [];
 $videoSegments = is_array($videoSegments ?? null) ? $videoSegments : [];
 $videoSegmentSummary = is_array($videoSegmentSummary ?? null) ? $videoSegmentSummary : null;
 $videoExportJobs = is_array($videoExportJobs ?? null) ? $videoExportJobs : [];
-$videoTranscriptions = is_array($videoTranscriptions ?? null) ? $videoTranscriptions : [];
+$videoProcessedExports = is_array($videoProcessedExports ?? null) ? $videoProcessedExports : [];
 $videoEditorError = is_string($videoEditorError ?? null) ? $videoEditorError : null;
 $videoFlash = is_string($_GET['video_message'] ?? null) ? (string) $_GET['video_message'] : '';
 $videoConfig = is_array($videoConfig ?? null) ? $videoConfig : [];
@@ -104,29 +106,12 @@ $metadataStatusLabel = static function (mixed $status): string {
 
 $exportStatusLabel = static function (mixed $status): string {
     return match ((string) $status) {
-        'pending' => 'Pendiente',
-        'processing' => 'Procesando',
-        'completed' => 'Completada',
-        'failed' => 'Fallida',
-        default => 'Pendiente',
-    };
-};
-
-$transcriptionStatusLabel = static function (mixed $status): string {
-    return match ((string) $status) {
         'pending' => 'En cola',
         'processing' => 'Procesando',
-        'completed' => 'Completada',
-        'failed' => 'Fallida',
-        default => 'Pendiente',
-    };
-};
-
-$transcriptionLanguageLabel = static function (mixed $language): string {
-    return match ((string) $language) {
-        'es' => 'Espanol',
-        'en' => 'Ingles',
-        default => 'Detectar automaticamente',
+        'completed' => 'Completado',
+        'expired' => 'Expirado',
+        'failed' => 'Fallido',
+        default => 'En cola',
     };
 };
 
@@ -219,7 +204,27 @@ $dateTimeLabel = static function (mixed $value): string {
         return '';
     }
 
-    return substr($value, 0, 16);
+    try {
+        $date = DateTimeHelper::utcStorageToLocalDateTime($value, 'America/Santiago');
+        $months = [
+            1 => 'ene',
+            2 => 'feb',
+            3 => 'mar',
+            4 => 'abr',
+            5 => 'may',
+            6 => 'jun',
+            7 => 'jul',
+            8 => 'ago',
+            9 => 'sept',
+            10 => 'oct',
+            11 => 'nov',
+            12 => 'dic',
+        ];
+
+        return $date->format('j') . ' ' . $months[(int) $date->format('n')] . ' ' . $date->format('Y') . ' · ' . $date->format('H:i');
+    } catch (Throwable) {
+        return substr($value, 0, 16);
+    }
 };
 
 $segmentSequenceLabel = static function (?array $summary): string {
@@ -237,13 +242,12 @@ $segmentSequenceLabel = static function (?array $summary): string {
     aria-labelledby="page-title"
     data-video-page
     data-api-url="/api/video/files.php"
+    data-video-exports-api-url="/api/video/exports.php"
     data-csrf-token="<?= View::escape(Csrf::token()) ?>"
     data-max-upload-mb="<?= View::escape($maxUploadMb) ?>"
     <?php if ($selectedVideo !== null): ?>
         data-video-detail-id="<?= View::escape($selectedVideo['id'] ?? '') ?>"
         data-metadata-status="<?= View::escape($selectedVideo['metadata_status'] ?? 'pending') ?>"
-        data-transcriptions-api-url="/api/video/transcriptions.php"
-        data-transcription-model="<?= View::escape((string) preg_replace('/\Aggml-|\.[^.]+\z/', '', basename((string) ($videoConfig['whisper_model_path'] ?? 'ggml-base.bin')))) ?>"
     <?php endif; ?>
 >
     <div class="page-heading tasks-heading">
@@ -253,6 +257,10 @@ $segmentSequenceLabel = static function (?array $summary): string {
             <p class="muted">Sube videos de forma segura para prepararlos para analisis y edicion local.</p>
         </div>
     </div>
+    <nav class="quick-filters" aria-label="Secciones de Video">
+        <a class="quick-filter <?= $activeVideoTab === 'editor' ? 'is-active' : '' ?>" href="/index.php?section=video" <?= $activeVideoTab === 'editor' ? 'aria-current="page"' : '' ?>>Editor</a>
+        <a class="quick-filter <?= $activeVideoTab === 'processings' ? 'is-active' : '' ?>" href="/index.php?section=video&amp;tab=processings" <?= $activeVideoTab === 'processings' ? 'aria-current="page"' : '' ?>>Procesamientos</a>
+    </nav>
     <?php if ($videoFlash === 'deleted'): ?>
         <p class="task-message task-message--success" role="status">Video eliminado correctamente.</p>
     <?php endif; ?>
@@ -261,8 +269,85 @@ $segmentSequenceLabel = static function (?array $summary): string {
         <section class="tasks-panel">
             <p class="task-message task-message--error">Video no encontrado.</p>
             <div class="task-actions task-actions--start">
-                <a class="button button--secondary" href="/index.php?section=video-editor">Volver</a>
+                <a class="button button--secondary" href="/index.php?section=video">Volver</a>
             </div>
+        </section>
+    <?php elseif ($videoMode === 'processed'): ?>
+        <section
+            class="tasks-panel video-processed-panel"
+            aria-labelledby="video-processed-title"
+            data-video-processed-panel
+            data-video-exports-list
+        >
+            <div class="tasks-list-header">
+                <div>
+                    <p class="eyebrow">Procesamientos</p>
+                    <h2 id="video-processed-title">Procesamientos</h2>
+                </div>
+                <span class="task-count" data-video-processed-count><?= count($videoProcessedExports) ?></span>
+            </div>
+
+            <div class="video-export-list video-export-list--processed" data-video-processed-list>
+                <?php if ($videoProcessedExports === []): ?>
+                    <div class="video-processed-empty">
+                        <p>Aun no has procesado videos.</p>
+                        <p>Edita un video y exportalo para verlo aqui.</p>
+                        <a class="button button--primary" href="/index.php?section=video">Ir al editor</a>
+                    </div>
+                <?php endif; ?>
+                <?php foreach ($videoProcessedExports as $job): ?>
+                    <?php
+                    $jobStatus = (string) ($job['status'] ?? 'pending');
+                    $displayStatus = (string) ($job['display_status'] ?? $jobStatus);
+                    $progress = max(0.0, min(100.0, (float) ($job['progress_percent'] ?? ($jobStatus === 'completed' ? 100 : 0))));
+                    $downloadable = (bool) ($job['is_downloadable'] ?? ($jobStatus === 'completed'));
+                    ?>
+                    <article class="video-export-item video-processed-item" data-export-job-id="<?= View::escape($job['id'] ?? '') ?>">
+                        <div class="video-processed-item__main">
+                            <strong><?= View::escape($job['output_name'] ?? 'Exportacion') ?></strong>
+                            <?php if (($job['video_original_name'] ?? '') !== ''): ?>
+                                <span>Original: <?= View::escape($job['video_original_name']) ?></span>
+                            <?php endif; ?>
+                            <div class="video-processed-meta">
+                                <span class="video-export-status video-export-status--<?= View::escape($displayStatus) ?>"><?= View::escape($exportStatusLabel($displayStatus)) ?></span>
+                                <?php if (($job['created_at'] ?? '') !== ''): ?>
+                                    <span><?= View::escape($dateTimeLabel($job['created_at'])) ?></span>
+                                <?php endif; ?>
+                                <?php if (($job['output_duration_seconds'] ?? null) !== null): ?>
+                                    <span><?= View::escape($durationLabel($job['output_duration_seconds'])) ?></span>
+                                <?php endif; ?>
+                                <?php if (($job['output_size_bytes'] ?? null) !== null): ?>
+                                    <span><?= View::escape($sizeLabel($job['output_size_bytes'])) ?></span>
+                                <?php endif; ?>
+                            </div>
+                            <?php if ($displayStatus === 'processing' || $displayStatus === 'pending'): ?>
+                                <div class="video-export-progress" aria-label="Progreso <?= View::escape(number_format($progress, 0)) ?>%">
+                                    <span style="width: <?= View::escape(number_format($progress, 2, '.', '')) ?>%"></span>
+                                </div>
+                                <small><?= $displayStatus === 'processing' ? 'Procesando...' : 'En cola' ?><?= $displayStatus === 'processing' ? ' ' . View::escape(number_format($progress, 0)) . '%' : '' ?></small>
+                            <?php elseif ($displayStatus === 'failed'): ?>
+                                <small>No se pudo completar la exportacion.</small>
+                            <?php elseif ($displayStatus === 'expired'): ?>
+                                <small>El archivo exportado ya expiro.</small>
+                            <?php endif; ?>
+                        </div>
+                        <div class="task-actions">
+                            <?php if ($jobStatus === 'completed' && $downloadable): ?>
+                                <button class="button button--secondary" type="button" data-export-action="play">Reproducir</button>
+                                <a class="button button--secondary" href="/video/export/download.php?id=<?= View::escape($job['id'] ?? '') ?>">Descargar</a>
+                            <?php endif; ?>
+                            <?php if ($jobStatus !== 'processing'): ?>
+                                <button class="button button--danger" type="button" data-export-action="delete">Eliminar</button>
+                            <?php endif; ?>
+                        </div>
+                        <?php if ($jobStatus === 'completed' && $downloadable): ?>
+                            <video class="video-player video-player--inline" controls preload="metadata" src="/video/export/stream.php?id=<?= View::escape($job['id'] ?? '') ?>" data-export-player hidden></video>
+                        <?php endif; ?>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+
+            <p class="task-message" role="status" aria-live="polite" data-video-message hidden></p>
         </section>
     <?php elseif ($selectedVideo !== null && $videoMode === 'editor'): ?>
         <section
@@ -283,7 +368,7 @@ $segmentSequenceLabel = static function (?array $summary): string {
                     <h2><?= View::escape($selectedVideo['original_name'] ?? '') ?></h2>
                 </div>
                 <div class="task-actions">
-                    <a class="button button--secondary" href="/index.php?section=video-editor&amp;id=<?= View::escape($selectedVideo['id'] ?? '') ?>">Volver al video</a>
+                    <a class="button button--secondary" href="/index.php?section=video&amp;id=<?= View::escape($selectedVideo['id'] ?? '') ?>">Volver al video</a>
                 </div>
             </div>
 
@@ -506,14 +591,6 @@ $segmentSequenceLabel = static function (?array $summary): string {
                                 <div class="task-actions">
                                     <?php if ($jobStatus === 'completed'): ?>
                                         <a class="button button--secondary" href="/video/export/download.php?id=<?= View::escape($job['id'] ?? '') ?>">Descargar</a>
-                                        <button
-                                            class="button button--secondary"
-                                            type="button"
-                                            data-video-transcription-open
-                                            data-transcription-source-type="export"
-                                            data-transcription-source-id="<?= View::escape($job['id'] ?? '') ?>"
-                                            data-transcription-source-name="<?= View::escape($job['output_name'] ?? 'Exportacion') ?>"
-                                        >Transcribir</button>
                                         <button class="button button--danger" type="button" data-export-action="delete">Eliminar exportacion</button>
                                     <?php elseif ($jobStatus === 'failed'): ?>
                                         <button class="button button--secondary" type="button" data-export-action="retry" data-output-name="<?= View::escape($job['output_name'] ?? '') ?>">Reintentar</button>
@@ -525,88 +602,6 @@ $segmentSequenceLabel = static function (?array $summary): string {
                     </div>
                 </section>
 
-                <section class="video-exports-panel" aria-labelledby="video-transcriptions-title-editor">
-                    <div class="tasks-list-header">
-                        <h3 id="video-transcriptions-title-editor">Transcripciones</h3>
-                        <span class="task-count" data-video-transcription-count><?= count($videoTranscriptions) ?></span>
-                    </div>
-
-                    <div class="task-actions task-actions--start">
-                        <button
-                            class="button button--primary"
-                            type="button"
-                            data-video-transcription-open
-                            data-transcription-source-type="video"
-                            data-transcription-source-id="<?= View::escape($selectedVideo['id'] ?? '') ?>"
-                            data-transcription-source-name="<?= View::escape($selectedVideo['original_name'] ?? 'Video') ?>"
-                        ><?= $videoTranscriptions === [] ? 'Transcribir' : 'Volver a transcribir' ?></button>
-                    </div>
-
-                    <div class="video-export-confirm" data-video-transcription-confirm hidden>
-                        <div class="video-result-summary">
-                            <div>
-                                <span>Transcribir</span>
-                                <strong data-video-transcription-source><?= View::escape($selectedVideo['original_name'] ?? 'Video') ?></strong>
-                            </div>
-                            <div>
-                                <span>Modelo</span>
-                                <strong data-video-transcription-model><?= View::escape((string) preg_replace('/\Aggml-|\.[^.]+\z/', '', basename((string) ($videoConfig['whisper_model_path'] ?? 'ggml-base.bin')))) ?></strong>
-                            </div>
-                        </div>
-                        <label>
-                            <span>Idioma</span>
-                            <select name="requested_language" data-video-transcription-language>
-                                <option value="auto">Detectar automaticamente</option>
-                                <option value="es">Espanol</option>
-                                <option value="en">Ingles</option>
-                            </select>
-                        </label>
-                        <div class="task-actions task-actions--start">
-                            <button class="button button--secondary" type="button" data-video-transcription-cancel>Cancelar</button>
-                            <button class="button button--primary" type="button" data-video-transcription-create>Iniciar transcripcion</button>
-                        </div>
-                    </div>
-
-                    <div class="video-export-list" data-video-transcription-list>
-                        <?php if ($videoTranscriptions === []): ?>
-                            <div class="video-cut-list__empty">Aun no has creado transcripciones.</div>
-                        <?php endif; ?>
-                        <?php foreach ($videoTranscriptions as $transcription): ?>
-                            <?php
-                            $transcriptionStatus = (string) ($transcription['status'] ?? 'pending');
-                            $transcriptionProgress = max(0.0, min(100.0, (float) ($transcription['progress_percent'] ?? ($transcriptionStatus === 'completed' ? 100 : 0))));
-                            ?>
-                            <article class="video-export-item" data-transcription-id="<?= View::escape($transcription['id'] ?? '') ?>">
-                                <div>
-                                    <strong><?= View::escape(($transcription['source_display_name'] ?? '') !== '' ? $transcription['source_display_name'] : $transcriptionLanguageLabel($transcription['requested_language'] ?? 'auto')) ?></strong>
-                                    <span><?= View::escape($transcriptionStatusLabel($transcriptionStatus)) ?> · <?= View::escape($transcriptionLanguageLabel($transcription['requested_language'] ?? 'auto')) ?></span>
-                                    <div class="video-export-progress" aria-label="Progreso <?= View::escape(number_format($transcriptionProgress, 0)) ?>%">
-                                        <span style="width: <?= View::escape(number_format($transcriptionProgress, 2, '.', '')) ?>%"></span>
-                                    </div>
-                                    <small><?= $transcriptionStatus === 'processing' ? 'Procesando...' : View::escape(number_format($transcriptionProgress, 0)) . '%' ?><?= $transcriptionStatus === 'completed' ? ' · ' . View::escape(number_format((int) ($transcription['segments_count'] ?? 0), 0, ',', '.')) . ' segmentos' : '' ?></small>
-                                    <?php if ($transcriptionStatus === 'completed'): ?>
-                                        <small>Transcripcion completada</small>
-                                    <?php elseif ($transcriptionStatus === 'failed'): ?>
-                                        <small>No se pudo completar la transcripcion.</small>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="task-actions">
-                                    <?php if ($transcriptionStatus === 'completed'): ?>
-                                        <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=txt">Descargar TXT</a>
-                                        <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=txt_timestamps">TXT con tiempos</a>
-                                        <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=srt">Descargar SRT</a>
-                                        <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=vtt">Descargar VTT</a>
-                                        <button class="button button--secondary" type="button" data-transcription-action="copy">Copiar texto</button>
-                                        <button class="button button--danger" type="button" data-transcription-action="delete">Eliminar transcripcion</button>
-                                    <?php elseif ($transcriptionStatus === 'failed'): ?>
-                                        <button class="button button--secondary" type="button" data-transcription-action="retry" data-source-type="<?= View::escape($transcription['source_type'] ?? 'video') ?>" data-source-id="<?= View::escape(($transcription['source_type'] ?? 'video') === 'export' ? ($transcription['export_job_id'] ?? '') : ($transcription['video_id'] ?? '')) ?>" data-source-name="<?= View::escape($transcription['source_display_name'] ?? '') ?>" data-language="<?= View::escape($transcription['requested_language'] ?? 'auto') ?>">Reintentar</button>
-                                        <button class="button button--danger" type="button" data-transcription-action="delete">Eliminar transcripcion</button>
-                                    <?php endif; ?>
-                                </div>
-                            </article>
-                        <?php endforeach; ?>
-                    </div>
-                </section>
             <?php endif; ?>
             <p class="task-message" role="status" aria-live="polite" data-video-message hidden></p>
         </section>
@@ -618,8 +613,8 @@ $segmentSequenceLabel = static function (?array $summary): string {
                     <h2><?= View::escape($selectedVideo['original_name'] ?? '') ?></h2>
                 </div>
                 <div class="task-actions">
-                    <a class="button button--secondary" href="/index.php?section=video-editor">Volver</a>
-                    <a class="button button--secondary" href="/index.php?section=video-editor&amp;id=<?= View::escape($selectedVideo['id'] ?? '') ?>&amp;editor=1">Editar video</a>
+                    <a class="button button--secondary" href="/index.php?section=video">Volver</a>
+                    <a class="button button--secondary" href="/index.php?section=video&amp;id=<?= View::escape($selectedVideo['id'] ?? '') ?>&amp;editor=1">Editar video</a>
                     <button class="button button--danger" type="button" data-video-action="delete" data-video-id="<?= View::escape($selectedVideo['id'] ?? '') ?>">Eliminar</button>
                 </div>
             </div>
@@ -653,89 +648,6 @@ $segmentSequenceLabel = static function (?array $summary): string {
                 <?php endif; ?>
             </div>
 
-            <section class="video-exports-panel" aria-labelledby="video-transcriptions-title">
-                <div class="tasks-list-header">
-                    <h3 id="video-transcriptions-title">Transcripciones</h3>
-                    <span class="task-count" data-video-transcription-count><?= count($videoTranscriptions) ?></span>
-                </div>
-
-                <div class="task-actions task-actions--start">
-                    <button
-                        class="button button--primary"
-                        type="button"
-                        data-video-transcription-open
-                        data-transcription-source-type="video"
-                        data-transcription-source-id="<?= View::escape($selectedVideo['id'] ?? '') ?>"
-                        data-transcription-source-name="<?= View::escape($selectedVideo['original_name'] ?? 'Video') ?>"
-                    ><?= $videoTranscriptions === [] ? 'Transcribir' : 'Volver a transcribir' ?></button>
-                </div>
-
-                <div class="video-export-confirm" data-video-transcription-confirm hidden>
-                    <div class="video-result-summary">
-                        <div>
-                            <span>Transcribir</span>
-                            <strong data-video-transcription-source><?= View::escape($selectedVideo['original_name'] ?? 'Video') ?></strong>
-                        </div>
-                        <div>
-                            <span>Modelo</span>
-                            <strong data-video-transcription-model><?= View::escape((string) preg_replace('/\Aggml-|\.[^.]+\z/', '', basename((string) ($videoConfig['whisper_model_path'] ?? 'ggml-base.bin')))) ?></strong>
-                        </div>
-                    </div>
-                    <label>
-                        <span>Idioma</span>
-                        <select name="requested_language" data-video-transcription-language>
-                            <option value="auto">Detectar automaticamente</option>
-                            <option value="es">Espanol</option>
-                            <option value="en">Ingles</option>
-                        </select>
-                    </label>
-                    <div class="task-actions task-actions--start">
-                        <button class="button button--secondary" type="button" data-video-transcription-cancel>Cancelar</button>
-                        <button class="button button--primary" type="button" data-video-transcription-create>Iniciar transcripcion</button>
-                    </div>
-                </div>
-
-                <div class="video-export-list" data-video-transcription-list>
-                    <?php if ($videoTranscriptions === []): ?>
-                        <div class="video-cut-list__empty">Aun no has creado transcripciones.</div>
-                    <?php endif; ?>
-                    <?php foreach ($videoTranscriptions as $transcription): ?>
-                        <?php
-                        $transcriptionStatus = (string) ($transcription['status'] ?? 'pending');
-                        $transcriptionProgress = max(0.0, min(100.0, (float) ($transcription['progress_percent'] ?? ($transcriptionStatus === 'completed' ? 100 : 0))));
-                        ?>
-                        <article class="video-export-item" data-transcription-id="<?= View::escape($transcription['id'] ?? '') ?>">
-                            <div>
-                                <strong><?= View::escape(($transcription['source_display_name'] ?? '') !== '' ? $transcription['source_display_name'] : $transcriptionLanguageLabel($transcription['requested_language'] ?? 'auto')) ?></strong>
-                                <span><?= View::escape($transcriptionStatusLabel($transcriptionStatus)) ?> · <?= View::escape($transcriptionLanguageLabel($transcription['requested_language'] ?? 'auto')) ?></span>
-                                <div class="video-export-progress" aria-label="Progreso <?= View::escape(number_format($transcriptionProgress, 0)) ?>%">
-                                    <span style="width: <?= View::escape(number_format($transcriptionProgress, 2, '.', '')) ?>%"></span>
-                                </div>
-                                <small><?= $transcriptionStatus === 'processing' ? 'Procesando...' : View::escape(number_format($transcriptionProgress, 0)) . '%' ?><?= $transcriptionStatus === 'completed' ? ' · ' . View::escape(number_format((int) ($transcription['segments_count'] ?? 0), 0, ',', '.')) . ' segmentos' : '' ?></small>
-                                <?php if ($transcriptionStatus === 'completed'): ?>
-                                    <small>Transcripcion completada</small>
-                                <?php elseif ($transcriptionStatus === 'failed'): ?>
-                                    <small>No se pudo completar la transcripcion.</small>
-                                <?php endif; ?>
-                            </div>
-                            <div class="task-actions">
-                                <?php if ($transcriptionStatus === 'completed'): ?>
-                                    <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=txt">Descargar TXT</a>
-                                    <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=txt_timestamps">TXT con tiempos</a>
-                                    <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=srt">Descargar SRT</a>
-                                    <a class="button button--secondary" href="/video/transcription/download.php?id=<?= View::escape($transcription['id'] ?? '') ?>&amp;format=vtt">Descargar VTT</a>
-                                    <button class="button button--secondary" type="button" data-transcription-action="copy">Copiar texto</button>
-                                    <button class="button button--danger" type="button" data-transcription-action="delete">Eliminar transcripcion</button>
-                                <?php elseif ($transcriptionStatus === 'failed'): ?>
-                                    <button class="button button--secondary" type="button" data-transcription-action="retry" data-source-type="<?= View::escape($transcription['source_type'] ?? 'video') ?>" data-source-id="<?= View::escape(($transcription['source_type'] ?? 'video') === 'export' ? ($transcription['export_job_id'] ?? '') : ($transcription['video_id'] ?? '')) ?>" data-source-name="<?= View::escape($transcription['source_display_name'] ?? '') ?>" data-language="<?= View::escape($transcription['requested_language'] ?? 'auto') ?>">Reintentar</button>
-                                    <button class="button button--danger" type="button" data-transcription-action="delete">Eliminar transcripcion</button>
-                                <?php endif; ?>
-                            </div>
-                        </article>
-                    <?php endforeach; ?>
-                </div>
-            </section>
-
             <p class="task-message" role="status" aria-live="polite" data-video-message hidden></p>
         </section>
     <?php else: ?>
@@ -767,7 +679,7 @@ $segmentSequenceLabel = static function (?array $summary): string {
             <?php foreach ($videos as $video): ?>
                 <article class="video-item" data-video-id="<?= View::escape($video['id'] ?? '') ?>">
                     <div class="video-item__main">
-                        <h3><a href="/index.php?section=video-editor&amp;id=<?= View::escape($video['id'] ?? '') ?>"><?= View::escape($video['original_name'] ?? '') ?></a></h3>
+                        <h3><a href="/index.php?section=video&amp;id=<?= View::escape($video['id'] ?? '') ?>"><?= View::escape($video['original_name'] ?? '') ?></a></h3>
                         <div class="task-meta">
                             <span><?= View::escape($sizeLabel($video['size_bytes'] ?? 0)) ?></span>
                             <?php foreach ($metadataSummary($video) as $summary): ?>
@@ -780,7 +692,7 @@ $segmentSequenceLabel = static function (?array $summary): string {
                         <?php if (($video['metadata_status'] ?? 'pending') === 'failed'): ?>
                             <button class="button button--secondary" type="button" data-video-action="retry-metadata">Reintentar analisis</button>
                         <?php endif; ?>
-                        <a class="button button--secondary" href="/index.php?section=video-editor&amp;id=<?= View::escape($video['id'] ?? '') ?>">Abrir</a>
+                        <a class="button button--secondary" href="/index.php?section=video&amp;id=<?= View::escape($video['id'] ?? '') ?>">Abrir</a>
                         <button class="button button--danger" type="button" data-video-action="delete">Eliminar</button>
                     </div>
                 </article>

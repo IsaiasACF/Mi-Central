@@ -72,6 +72,14 @@ final class VideoRepository
         return $statement->fetchAll();
     }
 
+    public function countForUser(int $userId): int
+    {
+        $statement = $this->pdo->prepare('SELECT COUNT(*) FROM video_files WHERE user_id = :user_id');
+        $statement->execute(['user_id' => $userId]);
+
+        return (int) $statement->fetchColumn();
+    }
+
     /**
      * @return array<string, mixed>|null
      */

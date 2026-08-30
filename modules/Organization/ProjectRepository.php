@@ -90,6 +90,17 @@ final class ProjectRepository
             $params['due_before'] = $filters['due_before'];
         }
 
+        if (isset($filters['label_id'])) {
+            $where[] = 'EXISTS (
+                SELECT 1
+                FROM organization_project_labels project_labels
+                WHERE project_labels.project_id = p.id
+                  AND project_labels.user_id = p.user_id
+                  AND project_labels.label_id = :label_id
+            )';
+            $params['label_id'] = $filters['label_id'];
+        }
+
         $statement = $this->pdo->prepare(
             'SELECT p.id, p.user_id, p.space_id, p.title, p.description, p.status,
                     p.starts_on, p.due_on, p.created_at, p.updated_at,

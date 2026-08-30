@@ -187,7 +187,6 @@ try {
         'POST',
         [
             'title' => $quickTitle,
-            'priority' => 'normal',
             'space_id' => '',
             'due_at' => '',
         ],
@@ -200,7 +199,7 @@ try {
     inbox_assert(inbox_count_by_title($pdo, $userId, $quickTitle) === $beforeCount + 1, 'Quick inbox create did not create exactly one task.');
     inbox_assert($task['space_id'] === null, 'Quick inbox task did not keep space_id NULL.');
     inbox_assert($task['status'] === 'pending', 'Quick inbox task did not default to pending.');
-    inbox_assert($task['priority'] === 'normal', 'Quick inbox task did not default to normal priority.');
+    inbox_assert($task['priority'] === 'normal', 'Quick inbox task did not keep legacy priority default.');
     inbox_assert($task['due_at'] === null, 'Quick inbox task unexpectedly has a due_at value.');
 
     $dashboardAfterCreate = inbox_request('http://127.0.0.1/index.php', 'GET', null, $cookieFile);
@@ -240,7 +239,6 @@ try {
             'title' => $quickTitle,
             'description' => '',
             'space_id' => (string) $spaceId,
-            'priority' => 'high',
             'due_at' => '2026-08-20T10:30',
         ],
         $cookieFile,

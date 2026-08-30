@@ -2,13 +2,42 @@
 declare(strict_types=1);
 
 use App\Http\RequireAuth;
+use App\Http\Csrf;
 use App\Http\SecurityHeaders;
 use App\Http\Session;
 use App\Support\Navigation;
 use App\Support\DateTimeHelper;
 use App\Support\View;
 use App\Database\Connection;
+use App\Services\AuthService;
+use App\Services\UserAdminService;
 use Modules\Dashboard\DashboardSummaryService;
+use Modules\Discounts\DiscountBenefitProgramRepository;
+use Modules\Discounts\DiscountBenefitProgramService;
+use Modules\Discounts\DiscountBenefitType;
+use Modules\Discounts\DiscountCompatibilityService;
+use Modules\Discounts\DiscountDiscoveryService;
+use Modules\Discounts\DiscountMerchantRepository;
+use Modules\Discounts\DiscountMerchantService;
+use Modules\Discounts\DiscountPromotionAvailabilityService;
+use Modules\Discounts\DiscountPromotionCategory;
+use Modules\Discounts\DiscountPromotionFormat;
+use Modules\Discounts\DiscountPromotionRepository;
+use Modules\Discounts\DiscountPromotionService;
+use Modules\Discounts\UserDiscountBenefitRepository;
+use Modules\Discounts\UserDiscountBenefitService;
+use Modules\Expenses\ExpenseCategoryRepository;
+use Modules\Expenses\ExpenseCategoryService;
+use Modules\Expenses\ExpenseHistoryService;
+use Modules\Expenses\ExpensePaymentMethodRepository;
+use Modules\Expenses\ExpensePaymentMethodService;
+use Modules\Expenses\ExpenseMonthlySummaryService;
+use Modules\Expenses\ExpenseRecurringAdjustmentRepository;
+use Modules\Expenses\ExpenseRecurringAdjustmentService;
+use Modules\Expenses\ExpenseRepository;
+use Modules\Expenses\ExpenseService as MonthlyExpenseService;
+use Modules\Expenses\ExpenseServiceDefinitionService;
+use Modules\Expenses\ExpenseServiceRepository;
 use Modules\Friends\CoincidenceService;
 use Modules\Friends\CoincidenceTaskPrefillService;
 use Modules\Friends\FriendRepository;
@@ -22,6 +51,8 @@ use Modules\Notifications\NotificationRepository;
 use Modules\Notifications\NotificationService;
 use Modules\Organization\CalendarRepository;
 use Modules\Organization\CalendarService;
+use Modules\Organization\LabelRepository;
+use Modules\Organization\LabelService;
 use Modules\Organization\NoteRepository;
 use Modules\Organization\NoteService;
 use Modules\Organization\ProjectRepository;
@@ -34,17 +65,14 @@ use Modules\Organization\TaskService;
 use Modules\Organization\TaskValidationException;
 use Modules\Video\VideoCutPointRepository;
 use Modules\Video\VideoEditSegmentRepository;
-use Modules\Video\TranscriptionSourceResolver;
 use Modules\Video\VideoEditorService;
 use Modules\Video\VideoExportJobRepository;
 use Modules\Video\VideoExportService;
+use Modules\Video\VideoDashboardSummaryService;
 use Modules\Video\VideoRepository;
 use Modules\Video\VideoService;
 use Modules\Video\VideoStorage;
-use Modules\Video\VideoTranscriptionRepository;
-use Modules\Video\VideoTranscriptionService;
 use Modules\Video\VideoValidationException;
-use Modules\Video\WhisperService;
 
 /**
  * @param array<string, mixed> $request
@@ -52,15 +80,17 @@ use Modules\Video\WhisperService;
  * @param array<string, mixed> $appConfig
  * @return array{ui: array<string, string>, service: array<string, string>, project_service: array<string, string>, note_service: array<string, string>, reminder_service: array<string, string>, calendar: array<string, string>}
  */
-function organizationFiltersFromRequest(array $request, array $spaces, array $appConfig): array
+function organizationFiltersFromRequest(array $request, array $spaces, array $labels, array $appConfig): array
 {
     $tab = is_string($request['tab'] ?? null) ? $request['tab'] : 'tasks';
     $legacyType = is_string($request['type'] ?? null) ? $request['type'] : '';
     $status = is_string($request['status'] ?? null) ? $request['status'] : 'pending';
     $space = is_string($request['space'] ?? null) ? $request['space'] : 'all';
-    $priority = is_string($request['priority'] ?? null) ? $request['priority'] : 'all';
+    $label = is_string($request['label'] ?? null) ? $request['label'] : 'all';
+    $sort = is_string($request['sort'] ?? null) ? $request['sort'] : 'deadline';
     $time = is_string($request['time'] ?? null) ? $request['time'] : 'all';
     $spaceIdsBySlug = [];
+    $labelIds = [];
 
     foreach ($spaces as $spaceRow) {
         if (isset($spaceRow['slug'], $spaceRow['id'])) {
@@ -68,11 +98,17 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
         }
     }
 
+    foreach ($labels as $labelRow) {
+        if (isset($labelRow['id'])) {
+            $labelIds[(string) $labelRow['id']] = true;
+        }
+    }
+
     if ($legacyType === 'projects') {
         $tab = 'projects';
     }
 
-    if (!in_array($tab, ['tasks', 'projects', 'notes', 'reminders', 'calendar'], true)) {
+    if (!in_array($tab, ['tasks', 'projects', 'notes', 'reminders', 'calendar', 'labels'], true)) {
         $tab = 'tasks';
     }
 
@@ -92,7 +128,11 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
         if (!in_array($status, ['pending', 'done', 'all'], true)) {
             $status = 'pending';
         }
-    } elseif ($tab === 'notes' || $tab === 'calendar') {
+    } elseif ($tab === 'notes') {
+        if (!in_array($status, ['active', 'completed', 'all'], true)) {
+            $status = 'active';
+        }
+    } elseif ($tab === 'calendar' || $tab === 'labels') {
         $status = 'all';
     } elseif (!in_array($status, ['pending', 'completed', 'all'], true)) {
         $status = 'pending';
@@ -102,8 +142,12 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
         $space = 'all';
     }
 
-    if (!in_array($priority, ['low', 'normal', 'high', 'all'], true)) {
-        $priority = 'all';
+    if ($label !== 'all' && !isset($labelIds[$label])) {
+        $label = 'all';
+    }
+
+    if (!in_array($sort, ['default', 'deadline'], true)) {
+        $sort = 'deadline';
     }
 
     if (!in_array($time, ['all', 'today', 'week', 'overdue'], true)) {
@@ -141,13 +185,14 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
         $noteService['space_id'] = $spaceIdsBySlug[$space];
     }
 
-    if ($tab === 'projects' || $tab === 'notes' || $tab === 'reminders' || $tab === 'calendar') {
-        $priority = 'all';
+    if ($tab === 'reminders' || $tab === 'calendar' || $tab === 'labels') {
         $time = 'all';
     }
 
-    if ($priority !== 'all') {
-        $service['priority'] = $priority;
+    if ($label !== 'all') {
+        $service['label_id'] = $label;
+        $projectService['label_id'] = $label;
+        $noteService['label_id'] = $label;
     }
 
     $timeFilters = [];
@@ -161,6 +206,15 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
         $projectService = array_merge($projectService, $timeFilters);
     }
 
+    if ($sort === 'deadline') {
+        $service['sort'] = 'deadline';
+        $projectService['sort'] = 'deadline';
+    }
+
+    if ($tab === 'notes' && $status !== 'all') {
+        $noteService['status'] = $status;
+    }
+
     if ($tab === 'reminders') {
         $reminderService['status'] = $status;
     }
@@ -170,7 +224,8 @@ function organizationFiltersFromRequest(array $request, array $spaces, array $ap
             'tab' => $tab,
             'status' => $status,
             'space' => $space,
-            'priority' => $priority,
+            'label' => $label,
+            'sort' => $sort,
             'time' => $time,
             'due_from' => $timeFilters['due_from'] ?? '',
             'due_to' => $timeFilters['due_to'] ?? '',
@@ -236,6 +291,57 @@ $user = Session::user();
 $username = is_array($user) ? (string) $user['username'] : '';
 $userId = is_array($user) ? (int) ($user['user_id'] ?? 0) : 0;
 $section = is_string($_GET['section'] ?? null) ? $_GET['section'] : null;
+
+if (in_array($section, [
+    'discounts-for-me',
+    'discounts-today',
+    'discounts-all',
+    'discounts-benefits',
+    'discounts-favorites',
+    'discounts-sources',
+], true)) {
+    $legacyDiscountTabs = [
+        'discounts-for-me' => 'for-me',
+        'discounts-today' => 'for-me',
+        'discounts-all' => 'all',
+        'discounts-benefits' => 'profile-benefits',
+        'discounts-favorites' => 'favorites',
+        'discounts-sources' => 'all',
+    ];
+    $legacyTab = $legacyDiscountTabs[$section] ?? 'for-me';
+    $target = $legacyTab === 'profile-benefits'
+        ? '/index.php?section=settings&tab=benefits'
+        : '/index.php?section=discounts';
+
+    if ($legacyTab !== 'for-me' && $legacyTab !== 'profile-benefits') {
+        $target .= '&tab=' . rawurlencode($legacyTab);
+    }
+
+    header('Location: ' . $target, true, 302);
+    exit;
+}
+
+if (in_array($section, ['video-editor', 'video-processing'], true)) {
+    $target = '/index.php?section=video';
+
+    if ($section === 'video-processing') {
+        $target .= '&tab=processings';
+    }
+
+    if (isset($_GET['tab']) && $_GET['tab'] === 'processed') {
+        $target = '/index.php?section=video&tab=processings';
+    }
+
+    foreach (['id', 'editor'] as $key) {
+        if (isset($_GET[$key]) && is_string($_GET[$key]) && $_GET[$key] !== '') {
+            $target .= '&' . rawurlencode($key) . '=' . rawurlencode((string) $_GET[$key]);
+        }
+    }
+
+    header('Location: ' . $target, true, 302);
+    exit;
+}
+
 $page = Navigation::resolve($section);
 $activeSection = $page['key'] ?? '';
 $navigationGroups = Navigation::groups();
@@ -260,6 +366,7 @@ $selectedProjectTasks = [];
 $organizationNotes = [];
 $organizationCalendar = null;
 $organizationReminders = [];
+$organizationLabels = [];
 $organizationTaskPrefill = null;
 $friends = [];
 $activeFriends = [];
@@ -277,8 +384,142 @@ $videoCutPoints = [];
 $videoSegments = [];
 $videoSegmentSummary = null;
 $videoExportJobs = [];
-$videoTranscriptions = [];
+$videoProcessedExports = [];
 $videoEditorError = null;
+$discountUserBenefits = [];
+$discountBenefitPrograms = [];
+$discountBenefitTypeLabels = DiscountBenefitType::labels();
+$discountMerchants = [];
+$discountAvailableCategories = [];
+$discountPromotions = [];
+$discountDiscoveryPromotions = [];
+$discountDiscoveryError = '';
+$discountUserBenefitCount = 0;
+$discountPromotionFilters = [
+    'tab' => 'for-me',
+    'status' => 'active',
+    'merchant_id' => '',
+    'benefit_program_id' => '',
+    'weekday' => '',
+    'search' => '',
+    'channel' => '',
+    'category' => '',
+    'collector_key' => '',
+    'state' => 'available',
+];
+$discountPromotionLabels = [
+    'discount_types' => DiscountPromotionFormat::discountTypeLabels(),
+    'channels' => DiscountPromotionFormat::channelLabels(),
+    'weekdays' => DiscountPromotionFormat::WEEKDAYS,
+    'categories' => DiscountPromotionCategory::labels(),
+];
+$expensesConfiguration = [
+    'active_tab' => 'categories',
+    'categories' => [],
+    'active_categories' => [],
+    'payment_methods' => [],
+    'active_payment_methods' => [],
+    'services' => [],
+    'active_services' => [],
+    'payment_method_type_labels' => [
+        'card' => 'Tarjeta',
+        'bank_account' => 'Cuenta bancaria',
+        'automatic_payment' => 'Pago automatico / PAT-PAC',
+        'wallet' => 'Billetera digital',
+        'webpay' => 'WebPay',
+        'transfer' => 'Transferencia',
+        'cash' => 'Efectivo',
+        'other' => 'Otro',
+    ],
+];
+$expensesMonth = [
+    'mode' => 'month',
+    'active_tab' => 'current',
+    'period_month' => DateTimeHelper::nowLocal()->format('Y-m-01'),
+    'month_value' => DateTimeHelper::nowLocal()->format('Y-m'),
+    'month_label' => '',
+    'previous_month' => '',
+    'next_month' => '',
+    'current_month' => DateTimeHelper::nowLocal()->format('Y-m'),
+    'today' => DateTimeHelper::nowLocal()->format('Y-m-d'),
+    'focused_expense_id' => '',
+    'items' => [],
+    'summary' => [
+        'total_amount_clp' => 0,
+        'paid_amount_clp' => 0,
+        'pending_amount_clp' => 0,
+        'overdue_amount_clp' => 0,
+        'cancelled_amount_clp' => 0,
+        'counts' => ['total' => 0, 'paid' => 0, 'pending' => 0, 'overdue' => 0, 'cancelled' => 0],
+    ],
+    'dashboard_summary' => [
+        'expense_count' => 0,
+        'total_known_clp' => 0,
+        'paid_known_clp' => 0,
+        'pending_known_clp' => 0,
+        'overdue_known_clp' => 0,
+        'unknown_amount_count' => 0,
+        'paid_percentage' => 0,
+        'category_breakdown' => [],
+        'payment_method_breakdown' => [],
+        'upcoming_due' => [],
+        'overdue_items' => [],
+    ],
+    'filtered_summary' => [
+        'total_amount_clp' => 0,
+        'paid_amount_clp' => 0,
+        'pending_amount_clp' => 0,
+        'overdue_amount_clp' => 0,
+        'cancelled_amount_clp' => 0,
+        'counts' => ['total' => 0, 'paid' => 0, 'pending' => 0, 'overdue' => 0, 'cancelled' => 0],
+    ],
+    'filters' => ['status' => '', 'category_id' => '', 'service_id' => '', 'payment_method_id' => '', 'search' => ''],
+    'sort' => 'due',
+];
+$expensesHistory = [
+    'range' => ExpenseHistoryService::RANGE_6_MONTHS,
+    'range_label' => 'Ultimos 6 meses',
+    'range_options' => ExpenseHistoryService::rangeLabels(),
+    'start_month' => '',
+    'end_month' => '',
+    'months_included' => 6,
+    'filters' => ['category_id' => null, 'service_id' => null, 'payment_method_id' => null],
+    'has_any_data' => false,
+    'has_comparison' => false,
+    'total_known_clp' => 0,
+    'total_paid_clp' => 0,
+    'average_monthly_clp' => 0,
+    'highest_month' => null,
+    'lowest_month' => null,
+    'monthly_totals' => [],
+    'monthly_unknown_count' => 0,
+    'category_breakdown' => [],
+    'service_breakdown' => [],
+    'payment_method_breakdown' => [],
+    'status_breakdown' => ['paid_clp' => 0, 'pending_clp' => 0, 'overdue_clp' => 0, 'unknown_amount_count' => 0],
+    'category_series' => [],
+    'service_series' => [],
+    'month_details' => [],
+];
+$settingsUsers = [
+    'is_admin' => false,
+    'users' => [],
+    'message' => '',
+    'error' => '',
+];
+$settingsBenefits = [
+    'programs' => [],
+    'selected_program_ids' => [],
+    'type_labels' => $discountBenefitTypeLabels,
+    'filters' => [
+        'search' => '',
+        'provider' => '',
+        'benefit_type' => '',
+    ],
+    'message' => '',
+    'error' => '',
+];
+$settingsTab = 'benefits';
 $friendFilters = [
     'status' => 'active',
     'tab' => 'now',
@@ -299,6 +540,119 @@ $notificationSummary = [
     'recent' => $notificationService->list($userId, ['limit' => 5]),
 ];
 
+if (is_array($page) && $page['key'] === 'settings') {
+    $pdo = Connection::get();
+    $authService = new AuthService($pdo);
+    $userAdminService = new UserAdminService($pdo);
+    $settingsUsers['is_admin'] = $authService->isAdmin($userId);
+    $settingsTab = is_string($_GET['tab'] ?? null) ? (string) $_GET['tab'] : 'benefits';
+
+    if (!in_array($settingsTab, ['benefits', 'users'], true)) {
+        $settingsTab = 'benefits';
+    }
+
+    if ($settingsTab === 'users' && !$settingsUsers['is_admin']) {
+        $settingsTab = 'benefits';
+    }
+
+    $programRepository = new DiscountBenefitProgramRepository($pdo);
+    $programService = new DiscountBenefitProgramService($programRepository);
+    $userBenefitService = new UserDiscountBenefitService(new UserDiscountBenefitRepository($pdo), $programService);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $csrfToken = is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : null;
+
+        if (!Csrf::validate($csrfToken)) {
+            http_response_code(400);
+            echo 'Solicitud invalida.';
+            exit;
+        }
+
+        $settingsAction = is_string($_POST['settings_action'] ?? null) ? (string) $_POST['settings_action'] : '';
+
+        if ($settingsAction === 'toggle_benefit') {
+            $programId = is_string($_POST['benefit_program_id'] ?? null) && preg_match('/\A[1-9][0-9]*\z/', (string) $_POST['benefit_program_id']) === 1
+                ? (int) $_POST['benefit_program_id']
+                : 0;
+            $enabled = (string) ($_POST['enabled'] ?? '0') === '1';
+            $result = 'benefit_invalid';
+
+            try {
+                $result = $userBenefitService->setProgramActive($userId, $programId, $enabled)
+                    ? ($enabled ? 'benefit_added' : 'benefit_removed')
+                    : 'benefit_invalid';
+            } catch (\Throwable) {
+                $result = 'benefit_invalid';
+            }
+
+            header('Location: /index.php?section=settings&tab=benefits&result=' . rawurlencode($result), true, 303);
+            exit;
+        }
+
+        if (!$settingsUsers['is_admin']) {
+            http_response_code(403);
+            echo 'No autorizado.';
+            exit;
+        }
+
+        $action = is_string($_POST['action'] ?? null) ? (string) $_POST['action'] : '';
+        $targetUserId = is_string($_POST['user_id'] ?? null) && preg_match('/\A[1-9][0-9]*\z/', (string) $_POST['user_id']) === 1
+            ? (int) $_POST['user_id']
+            : 0;
+        $result = 'invalid';
+
+        try {
+            $ok = match ($action) {
+                'deactivate' => $userAdminService->deactivate($targetUserId, $userId),
+                'reactivate' => $userAdminService->reactivate($targetUserId),
+                default => false,
+            };
+            $result = $ok ? $action : 'unchanged';
+        } catch (\RuntimeException) {
+            $result = 'self';
+        }
+
+        header('Location: /index.php?section=settings&tab=users&result=' . rawurlencode($result), true, 303);
+        exit;
+    }
+
+    if ($settingsUsers['is_admin']) {
+        $settingsUsers['users'] = $userAdminService->users();
+    }
+
+    $settingsBenefits['filters'] = [
+        'search' => is_string($_GET['benefit_search'] ?? null) ? trim((string) $_GET['benefit_search']) : '',
+        'provider' => is_string($_GET['benefit_provider'] ?? null) ? trim((string) $_GET['benefit_provider']) : '',
+        'benefit_type' => is_string($_GET['benefit_type'] ?? null) ? trim((string) $_GET['benefit_type']) : '',
+    ];
+    $settingsBenefits['programs'] = $programService->listActive();
+    $settingsBenefits['selected_program_ids'] = array_fill_keys(
+        array_map(static fn (array $benefit): int => (int) ($benefit['benefit_program_id'] ?? 0), $userBenefitService->listActive($userId)),
+        true,
+    );
+
+    $result = is_string($_GET['result'] ?? null) ? (string) $_GET['result'] : '';
+    $settingsUsers['message'] = match ($result) {
+        'deactivate' => 'Usuario desactivado.',
+        'reactivate' => 'Usuario reactivado.',
+        default => '',
+    };
+    $settingsUsers['error'] = match ($result) {
+        'self' => 'No puedes aplicar esa accion sobre tu propia cuenta.',
+        'unchanged' => 'No se realizaron cambios.',
+        'invalid' => 'Accion invalida.',
+        default => '',
+    };
+    $settingsBenefits['message'] = match ($result) {
+        'benefit_added' => 'Beneficio agregado a tu perfil.',
+        'benefit_removed' => 'Beneficio quitado de tu perfil.',
+        default => '',
+    };
+    $settingsBenefits['error'] = $result === 'benefit_invalid'
+        ? 'No se pudo actualizar ese beneficio.'
+        : '';
+}
+
 if (is_array($page) && $page['key'] === 'home') {
     $pdo = Connection::get();
     $taskService = new TaskService(new TaskRepository($pdo));
@@ -312,7 +666,7 @@ if (is_array($page) && $page['key'] === 'home') {
         $scheduleResolver,
     );
     $coincidenceService = new CoincidenceService(new FriendRepository($pdo), $scheduleResolver);
-    $dashboardSummary = (new DashboardSummaryService($config['app'], $taskService, $userId, $reminderService, $notificationService, $friendPresenceService, $coincidenceService))->summary();
+    $dashboardSummary = (new DashboardSummaryService($config['app'], $taskService, $userId, $reminderService, $notificationService, $friendPresenceService, $coincidenceService, new VideoDashboardSummaryService($pdo)))->summary();
 }
 
 if (is_array($page) && $page['key'] === 'notifications') {
@@ -331,15 +685,17 @@ if (is_array($page) && $page['key'] === 'notifications') {
 
 if (is_array($page) && $page['key'] === 'organization') {
     $pdo = Connection::get();
-    $taskService = new TaskService(new TaskRepository($pdo));
-    $projectService = new ProjectService(new ProjectRepository($pdo));
-    $noteService = new NoteService(new NoteRepository($pdo));
+    $labelService = new LabelService(new LabelRepository($pdo));
+    $taskService = new TaskService(new TaskRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'), $labelService);
+    $projectService = new ProjectService(new ProjectRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'), $labelService);
+    $noteService = new NoteService(new NoteRepository($pdo), $labelService);
     $reminderService = new ReminderService(new ReminderRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'));
-    $calendarService = new CalendarService(new CalendarRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'));
+    $calendarService = new CalendarService(new CalendarRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'), $labelService);
     $spaceRepository = new SpaceRepository($pdo);
     $organizationSpaces = $spaceRepository->listForUser($userId);
+    $organizationLabels = $labelService->list($userId);
     $taskPageMode = 'organization';
-    $taskFilters = organizationFiltersFromRequest($_GET, $organizationSpaces, $config['app']);
+    $taskFilters = organizationFiltersFromRequest($_GET, $organizationSpaces, $organizationLabels, $config['app']);
 
     try {
         if (($_GET['from'] ?? '') === 'coincidence') {
@@ -624,7 +980,216 @@ if (is_array($page) && $page['key'] === 'friends') {
     }
 }
 
-if (is_array($page) && $page['key'] === 'video-editor') {
+if (is_array($page) && $page['key'] === 'discounts') {
+    $pdo = Connection::get();
+    $programRepository = new DiscountBenefitProgramRepository($pdo);
+    $userBenefitRepository = new UserDiscountBenefitRepository($pdo);
+    $promotionRepository = new DiscountPromotionRepository($pdo);
+    $programService = new DiscountBenefitProgramService($programRepository);
+    $merchantService = new DiscountMerchantService(new DiscountMerchantRepository($pdo));
+    $promotionService = new DiscountPromotionService($promotionRepository, $merchantService, $programService);
+    $userBenefitService = new UserDiscountBenefitService($userBenefitRepository, $programService);
+    $compatibilityService = new DiscountCompatibilityService($promotionRepository, $userBenefitRepository);
+    $availabilityService = new DiscountPromotionAvailabilityService((string) ($config['app']['timezone'] ?? 'America/Santiago'));
+    $discoveryService = new DiscountDiscoveryService($promotionRepository, $compatibilityService, $availabilityService);
+    $discountTab = is_string($_GET['tab'] ?? null) ? (string) $_GET['tab'] : 'for-me';
+
+    if ($discountTab === 'benefits') {
+        header('Location: /index.php?section=settings&tab=benefits', true, 302);
+        exit;
+    }
+
+    if ($discountTab === 'today') {
+        header('Location: /index.php?section=discounts', true, 302);
+        exit;
+    }
+
+    if ($discountTab === 'promotions') {
+        header('Location: /index.php?section=discounts&tab=all', true, 302);
+        exit;
+    }
+
+    if (!in_array($discountTab, ['for-me', 'favorites', 'all'], true)) {
+        $discountTab = 'for-me';
+    }
+
+    $discountPromotionFilters = [
+        'tab' => $discountTab,
+        'status' => is_string($_GET['status'] ?? null) ? (string) $_GET['status'] : 'active',
+        'merchant_id' => is_string($_GET['merchant_id'] ?? null) ? (string) $_GET['merchant_id'] : '',
+        'benefit_program_id' => is_string($_GET['benefit_program_id'] ?? null) ? (string) $_GET['benefit_program_id'] : '',
+        'weekday' => is_string($_GET['weekday'] ?? null) ? (string) $_GET['weekday'] : '',
+        'search' => is_string($_GET['search'] ?? null) ? (string) $_GET['search'] : '',
+        'channel' => is_string($_GET['channel'] ?? null) ? (string) $_GET['channel'] : '',
+        'category' => is_string($_GET['category'] ?? null) ? (string) $_GET['category'] : '',
+        'collector_key' => is_string($_GET['collector_key'] ?? null) ? (string) $_GET['collector_key'] : '',
+        'state' => is_string($_GET['state'] ?? null) ? (string) $_GET['state'] : 'available',
+    ];
+    $discountUserBenefits = $userBenefitService->listActive($userId);
+    $discountUserBenefitCount = count($discountUserBenefits);
+    $discountBenefitPrograms = $programService->listActive();
+    $discountMerchants = $merchantService->listActive();
+    $discountAvailableCategories = $promotionRepository->listVisibleCategoriesForUser($userId);
+
+    try {
+        if ($discountTab === 'all') {
+            $discountDiscoveryPromotions = $discoveryService->all($userId, $discountPromotionFilters);
+        } elseif ($discountTab === 'favorites') {
+            $discountDiscoveryPromotions = $discoveryService->favorites($userId, $discountPromotionFilters);
+        } elseif ($discountTab === 'for-me') {
+            $discountDiscoveryPromotions = $discoveryService->forMe($userId, $discountPromotionFilters);
+        }
+    } catch (\Throwable $exception) {
+        error_log('Discount discovery failed: ' . $exception->getMessage());
+        $discountDiscoveryPromotions = [];
+        $discountDiscoveryError = 'No se pudieron cargar los descuentos con esos filtros.';
+    }
+}
+
+if (is_array($page) && $page['key'] === 'expenses') {
+    $pdo = Connection::get();
+    $categoryService = new ExpenseCategoryService(new ExpenseCategoryRepository($pdo));
+    $paymentMethodService = new ExpensePaymentMethodService(new ExpensePaymentMethodRepository($pdo));
+    $serviceDefinitionService = new ExpenseServiceDefinitionService(new ExpenseServiceRepository($pdo));
+    $recurringAdjustmentService = new ExpenseRecurringAdjustmentService(
+        new ExpenseRecurringAdjustmentRepository($pdo),
+        (string) ($config['app']['timezone'] ?? DateTimeHelper::DEFAULT_TIMEZONE),
+    );
+    $monthlyExpenseService = new MonthlyExpenseService(new ExpenseRepository($pdo));
+    $monthlySummaryService = new ExpenseMonthlySummaryService($pdo, (string) ($config['app']['timezone'] ?? DateTimeHelper::DEFAULT_TIMEZONE));
+    $historyService = new ExpenseHistoryService($pdo, (string) ($config['app']['timezone'] ?? DateTimeHelper::DEFAULT_TIMEZONE));
+    $expensesTab = is_string($_GET['tab'] ?? null) ? (string) $_GET['tab'] : 'current';
+    $configurationTabs = ['categories', 'payment-methods', 'services', 'import'];
+    $expensesMode = $expensesTab === 'history'
+        ? 'history'
+        : (in_array($expensesTab, $configurationTabs, true) || $expensesTab === 'settings' ? 'settings' : 'month');
+    $configurationTab = in_array($expensesTab, $configurationTabs, true) ? $expensesTab : 'categories';
+
+    $expenseServices = $serviceDefinitionService->list($userId);
+    $activeExpenseServices = $serviceDefinitionService->list($userId, true);
+
+    foreach ($expenseServices as $index => $service) {
+        $expenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentService->listForService($userId, (int) ($service['id'] ?? 0));
+    }
+
+    foreach ($activeExpenseServices as $index => $service) {
+        $activeExpenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentService->listForService($userId, (int) ($service['id'] ?? 0));
+    }
+
+    $expensesConfiguration = [
+        'active_tab' => $configurationTab,
+        'categories' => $categoryService->list($userId),
+        'active_categories' => $categoryService->list($userId, true),
+        'payment_methods' => $paymentMethodService->list($userId),
+        'active_payment_methods' => $paymentMethodService->list($userId, true),
+        'services' => $expenseServices,
+        'active_services' => $activeExpenseServices,
+        'payment_method_type_labels' => $expensesConfiguration['payment_method_type_labels'],
+    ];
+
+    $today = DateTimeHelper::nowLocal();
+    $currentMonth = $today->format('Y-m');
+    $monthValue = is_string($_GET['month'] ?? null) ? trim((string) $_GET['month']) : $currentMonth;
+
+    if (preg_match('/\A(19|20|21|22)[0-9]{2}-(0[1-9]|1[0-2])\z/', $monthValue) !== 1) {
+        $monthValue = $currentMonth;
+    }
+
+    $monthDate = DateTimeImmutable::createFromFormat('!Y-m-d', $monthValue . '-01', DateTimeHelper::timezone());
+    $monthDate = $monthDate instanceof DateTimeImmutable ? $monthDate : $today->modify('first day of this month');
+    $monthNames = [
+        1 => 'Enero',
+        2 => 'Febrero',
+        3 => 'Marzo',
+        4 => 'Abril',
+        5 => 'Mayo',
+        6 => 'Junio',
+        7 => 'Julio',
+        8 => 'Agosto',
+        9 => 'Septiembre',
+        10 => 'Octubre',
+        11 => 'Noviembre',
+        12 => 'Diciembre',
+    ];
+    $expenseFilters = [
+        'status' => is_string($_GET['status'] ?? null) ? (string) $_GET['status'] : '',
+        'category_id' => is_string($_GET['category_id'] ?? null) ? (string) $_GET['category_id'] : '',
+        'service_id' => is_string($_GET['service_id'] ?? null) ? (string) $_GET['service_id'] : '',
+        'payment_method_id' => is_string($_GET['payment_method_id'] ?? null) ? (string) $_GET['payment_method_id'] : '',
+        'search' => is_string($_GET['search'] ?? null) ? trim((string) $_GET['search']) : '',
+    ];
+    $expenseSort = is_string($_GET['sort'] ?? null) ? (string) $_GET['sort'] : 'due';
+    $focusedExpenseId = is_string($_GET['expense'] ?? null) && preg_match('/\A[1-9][0-9]*\z/', (string) $_GET['expense']) === 1
+        ? (string) $_GET['expense']
+        : '';
+    $historyFilters = [
+        'range' => is_string($_GET['range'] ?? null) ? (string) $_GET['range'] : ExpenseHistoryService::RANGE_6_MONTHS,
+        'category_id' => is_string($_GET['category_id'] ?? null) ? (string) $_GET['category_id'] : '',
+        'service_id' => is_string($_GET['service_id'] ?? null) ? (string) $_GET['service_id'] : '',
+        'payment_method_id' => is_string($_GET['payment_method_id'] ?? null) ? (string) $_GET['payment_method_id'] : '',
+    ];
+
+    try {
+        $monthData = $monthlyExpenseService->listForMonth(
+            $userId,
+            (int) $monthDate->format('Y'),
+            (int) $monthDate->format('n'),
+            $today,
+            $expenseFilters,
+            $expenseSort,
+        );
+        $monthlySummary = $monthlySummaryService->summary($userId, $monthData['period_month'], $today);
+        $expensesHistory = $historyService->history($userId, $historyFilters, $today);
+    } catch (\Throwable $exception) {
+        error_log('Expenses monthly page failed: ' . $exception->getMessage());
+        $expenseFilters = ['status' => '', 'category_id' => '', 'service_id' => '', 'payment_method_id' => '', 'search' => ''];
+        $expenseSort = 'due';
+        $monthData = $monthlyExpenseService->listForMonth(
+            $userId,
+            (int) $monthDate->format('Y'),
+            (int) $monthDate->format('n'),
+            $today,
+            $expenseFilters,
+            $expenseSort,
+        );
+        $monthlySummary = $monthlySummaryService->summary($userId, $monthData['period_month'], $today);
+        $expensesHistory = $historyService->history($userId, ['range' => ExpenseHistoryService::RANGE_6_MONTHS], $today);
+    }
+
+    $expensesMonth = [
+        'mode' => $expensesMode,
+        'active_tab' => $expensesMode === 'month' ? 'current' : $expensesMode,
+        'period_month' => $monthData['period_month'],
+        'month_value' => $monthDate->format('Y-m'),
+        'month_label' => ($monthNames[(int) $monthDate->format('n')] ?? $monthDate->format('F')) . ' ' . $monthDate->format('Y'),
+        'previous_month' => $monthDate->modify('-1 month')->format('Y-m'),
+        'next_month' => $monthDate->modify('+1 month')->format('Y-m'),
+        'current_month' => $currentMonth,
+        'today' => $today->format('Y-m-d'),
+        'focused_expense_id' => $focusedExpenseId,
+        'items' => $monthData['items'],
+        'all_items' => $monthData['all_items'] ?? $monthData['items'],
+        'summary' => [
+            'total_amount_clp' => $monthData['total_amount_clp'],
+            'paid_amount_clp' => $monthData['paid_amount_clp'],
+            'pending_amount_clp' => $monthData['pending_amount_clp'],
+            'overdue_amount_clp' => $monthData['overdue_amount_clp'],
+            'cancelled_amount_clp' => $monthData['cancelled_amount_clp'],
+            'unknown_amount_count' => $monthData['unknown_amount_count'],
+            'pending_unknown_amount_count' => $monthData['pending_unknown_amount_count'],
+            'overdue_unknown_amount_count' => $monthData['overdue_unknown_amount_count'],
+            'paid_unknown_amount_count' => $monthData['paid_unknown_amount_count'],
+            'cancelled_unknown_amount_count' => $monthData['cancelled_unknown_amount_count'],
+            'counts' => $monthData['counts'],
+        ],
+        'dashboard_summary' => $monthlySummary,
+        'filtered_summary' => $monthData['filtered_summary'],
+        'filters' => $expenseFilters,
+        'sort' => $monthData['sort'],
+    ];
+}
+
+if (is_array($page) && $page['key'] === 'video') {
     $videoConfig = is_array($config['video'] ?? null) ? $config['video'] : [];
     $pdo = Connection::get();
     $videoRepository = new VideoRepository($pdo);
@@ -634,8 +1199,25 @@ if (is_array($page) && $page['key'] === 'video-editor') {
         : null;
 
     if ($videoId === null) {
-        $videoMode = 'list';
-        $videoFiles = $videoService->list($userId);
+        $videoTab = is_string($_GET['tab'] ?? null) ? (string) $_GET['tab'] : 'editor';
+
+        if (!in_array($videoTab, ['editor', 'processings'], true)) {
+            $videoTab = 'editor';
+        }
+
+        $videoMode = $videoTab === 'processings' ? 'processed' : 'list';
+
+        if ($videoMode === 'processed') {
+            $storage = new VideoStorage($videoConfig);
+            $videoProcessedExports = (new VideoExportService(
+                $videoRepository,
+                new VideoEditorService($videoRepository, new VideoCutPointRepository($pdo), new VideoEditSegmentRepository($pdo)),
+                new VideoExportJobRepository($pdo),
+                $storage,
+            ))->listProcessed($userId);
+        } else {
+            $videoFiles = $videoService->list($userId);
+        }
     } else {
         $videoMode = (string) ($_GET['editor'] ?? '') === '1' ? 'editor' : 'detail';
         $selectedVideo = $videoService->get($userId, $videoId);
@@ -651,20 +1233,9 @@ if (is_array($page) && $page['key'] === 'video-editor') {
                 $videoSegments = is_array($segmentCollection['segments'] ?? null) ? $segmentCollection['segments'] : [];
                 $videoSegmentSummary = is_array($segmentCollection['summary'] ?? null) ? $segmentCollection['summary'] : null;
                 $videoExportJobs = (new VideoExportService($videoRepository, $videoEditorService, new VideoExportJobRepository($pdo), new VideoStorage($videoConfig)))->list($userId, $videoId);
-                $videoTranscriptions = (new VideoTranscriptionService(
-                    new VideoTranscriptionRepository($pdo),
-                    new TranscriptionSourceResolver($videoRepository, new VideoExportJobRepository($pdo), new VideoStorage($videoConfig)),
-                    new WhisperService($videoConfig, new VideoStorage($videoConfig)),
-                ))->list($userId, $videoId);
             } catch (VideoValidationException $exception) {
                 $videoEditorError = $exception->getMessage();
             }
-        } else {
-            $videoTranscriptions = (new VideoTranscriptionService(
-                new VideoTranscriptionRepository($pdo),
-                new TranscriptionSourceResolver($videoRepository, new VideoExportJobRepository($pdo), new VideoStorage($videoConfig)),
-                new WhisperService($videoConfig, new VideoStorage($videoConfig)),
-            ))->list($userId, $videoId);
         }
     }
 }
@@ -679,7 +1250,7 @@ if ($page === null) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= View::escape(($page['title'] ?? 'Seccion no encontrada') . ' - Mi Central') ?></title>
-    <link rel="stylesheet" href="/assets/css/app.css">
+    <link rel="stylesheet" href="/assets/css/app.css?v=<?= (string) (filemtime(dirname(__DIR__) . '/public/assets/css/app.css') ?: '1') ?>">
 </head>
 <body>
 <a class="skip-link" href="#main-content">Saltar al contenido</a>
@@ -720,11 +1291,19 @@ View::render('layout/header', [
                     'notes' => $organizationNotes,
                     'reminders' => $organizationReminders,
                     'calendar' => $organizationCalendar,
+                    'labels' => $organizationLabels,
                     'taskPrefill' => $organizationTaskPrefill,
                 ]);
             } elseif ($page['key'] === 'notifications') {
                 View::render('pages/notifications', [
                     'notificationsPage' => $notificationsPage,
+                ]);
+            } elseif ($page['key'] === 'settings') {
+                View::render('pages/settings', [
+                    'settingsUsers' => $settingsUsers,
+                    'settingsBenefits' => $settingsBenefits,
+                    'activeTab' => $settingsTab,
+                    'currentUserId' => $userId,
                 ]);
             } elseif ($page['key'] === 'friends') {
                 View::render('pages/friends', [
@@ -737,7 +1316,25 @@ View::render('layout/header', [
                     'coincidences' => $friendCoincidences,
                     'filters' => $friendFilters,
                 ]);
-            } elseif ($page['key'] === 'video-editor') {
+            } elseif ($page['key'] === 'discounts') {
+                View::render('pages/discounts-discovery', [
+                    'activeTab' => $discountPromotionFilters['tab'] ?? 'for-me',
+                    'promotions' => $discountDiscoveryPromotions,
+                    'merchants' => $discountMerchants,
+                    'benefitPrograms' => $discountBenefitPrograms,
+                    'availableCategories' => $discountAvailableCategories,
+                    'promotionLabels' => $discountPromotionLabels,
+                    'filters' => $discountPromotionFilters,
+                    'userBenefitCount' => $discountUserBenefitCount,
+                    'error' => $discountDiscoveryError,
+                ]);
+            } elseif ($page['key'] === 'expenses') {
+                View::render('pages/expenses', [
+                    'configuration' => $expensesConfiguration,
+                    'month' => $expensesMonth,
+                    'history' => $expensesHistory,
+                ]);
+            } elseif ($page['key'] === 'video') {
                 View::render('pages/video', [
                     'videos' => $videoFiles,
                     'videoConfig' => $videoConfig,
@@ -748,7 +1345,7 @@ View::render('layout/header', [
                     'videoSegments' => $videoSegments,
                     'videoSegmentSummary' => $videoSegmentSummary,
                     'videoExportJobs' => $videoExportJobs,
-                    'videoTranscriptions' => $videoTranscriptions,
+                    'videoProcessedExports' => $videoProcessedExports,
                     'videoEditorError' => $videoEditorError,
                 ]);
             } else {

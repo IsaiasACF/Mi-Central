@@ -116,7 +116,7 @@ Vista inicial privada para acceder y resumir los modulos principales.
 - Recurrencias.
 - Centro de notificaciones.
 
-### Amigos en la U
+### Horarios
 
 - Amigos.
 - Universidad.

@@ -6,6 +6,8 @@ use App\Http\Csrf;
 use App\Http\JsonResponse;
 use App\Http\SecurityHeaders;
 use App\Http\Session;
+use Modules\Organization\LabelRepository;
+use Modules\Organization\LabelService;
 use Modules\Organization\TaskRepository;
 use Modules\Organization\TaskService;
 use Modules\Organization\TaskValidationException;
@@ -22,7 +24,9 @@ if (!Session::isAuthenticated()) {
 $user = Session::user();
 $userId = (int) ($user['user_id'] ?? 0);
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$service = new TaskService(new TaskRepository(Connection::get()));
+$pdo = Connection::get();
+$labelService = new LabelService(new LabelRepository($pdo));
+$service = new TaskService(new TaskRepository($pdo), (string) ($config['app']['timezone'] ?? 'America/Santiago'), $labelService);
 
 try {
     if ($method === 'GET') {

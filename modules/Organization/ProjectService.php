@@ -3,13 +3,22 @@ declare(strict_types=1);
 
 namespace Modules\Organization;
 
+use App\Support\DateTimeHelper;
+
 final class ProjectService
 {
     private const TITLE_MAX_LENGTH = 180;
     private const STATUSES = ['active', 'completed', 'archived'];
 
-    public function __construct(private readonly ProjectRepository $projects)
-    {
+    private readonly DeadlineUrgencyService $urgency;
+
+    public function __construct(
+        private readonly ProjectRepository $projects,
+        private readonly string $timezone = DateTimeHelper::DEFAULT_TIMEZONE,
+        private readonly ?LabelService $labels = null,
+        ?DeadlineUrgencyService $urgency = null,
+    ) {
+        $this->urgency = $urgency ?? new DeadlineUrgencyService($timezone);
     }
 
     /**
@@ -26,9 +35,12 @@ final class ProjectService
             'starts_on' => $this->optionalDate($input['starts_on'] ?? null, 'starts_on'),
             'due_on' => $this->optionalDate($input['due_on'] ?? null, 'due_on'),
         ];
+        $labelIds = $this->labels?->labelIdsFromInput($input) ?? [];
+        $this->labels?->assertLabelIdsBelongToUser($userId, $labelIds);
         $this->assertDateRange($data['starts_on'], $data['due_on']);
 
         $projectId = $this->projects->create($userId, $data);
+        $this->labels?->syncEntityLabels($userId, 'project', $projectId, $labelIds);
 
         return $this->get($userId, $projectId) ?? [];
     }
@@ -38,7 +50,19 @@ final class ProjectService
      */
     public function get(int $userId, int $projectId): ?array
     {
-        return $this->projects->findByIdForUser($userId, $this->positiveId($projectId, 'id'));
+        $project = $this->projects->findByIdForUser($userId, $this->positiveId($projectId, 'id'));
+
+        if ($project === null) {
+            return null;
+        }
+
+        $project = $this->withUrgency($project);
+
+        if ($this->labels !== null) {
+            $project = $this->labels->attachLabelsToEntities($userId, 'project', [$project])[0] ?? $project;
+        }
+
+        return $project;
     }
 
     /**
@@ -69,7 +93,30 @@ final class ProjectService
             $normalized['due_before'] = substr((string) $filters['due_before'], 0, 10);
         }
 
-        return $this->projects->listForUser($userId, $normalized);
+        if (isset($filters['label_id']) && $filters['label_id'] !== '' && $filters['label_id'] !== 'all') {
+            $labelId = $this->filterId($filters['label_id'], 'label_id');
+
+            if ($this->labels === null || $this->labels->get($userId, $labelId) === null) {
+                throw new TaskValidationException('Relacion invalida.');
+            }
+
+            $normalized['label_id'] = $labelId;
+        }
+
+        $projects = array_map(
+            fn (array $project): array => $this->withUrgency($project),
+            $this->projects->listForUser($userId, $normalized),
+        );
+
+        if ($this->labels !== null) {
+            $projects = $this->labels->attachLabelsToEntities($userId, 'project', $projects);
+        }
+
+        if (($filters['sort'] ?? null) === 'deadline') {
+            $this->sortByDeadline($projects);
+        }
+
+        return $projects;
     }
 
     /**
@@ -115,10 +162,22 @@ final class ProjectService
             array_key_exists('starts_on', $data) ? $data['starts_on'] : ($currentProject['starts_on'] ?? null),
             array_key_exists('due_on', $data) ? $data['due_on'] : ($currentProject['due_on'] ?? null)
         );
+        $labelIds = array_key_exists('label_ids', $input) && $this->labels !== null
+            ? $this->labels->labelIdsFromInput($input)
+            : null;
+
+        if ($labelIds !== null) {
+            $this->labels?->assertLabelIdsBelongToUser($userId, $labelIds);
+        }
+
         $this->projects->update($userId, $projectId, $data);
 
         if (array_key_exists('space_id', $data) && (int) $currentProject['space_id'] !== (int) $data['space_id']) {
             $this->projects->syncTaskSpacesForProject($userId, $projectId, (int) $data['space_id']);
+        }
+
+        if ($labelIds !== null) {
+            $this->labels?->syncEntityLabels($userId, 'project', $projectId, $labelIds);
         }
 
         return $this->get($userId, $projectId);
@@ -237,5 +296,62 @@ final class ProjectService
         }
 
         return $value;
+    }
+
+    private function filterId(mixed $value, string $field): int
+    {
+        if (is_int($value)) {
+            return $this->positiveId($value, $field);
+        }
+
+        if (is_string($value) && preg_match('/\A[1-9][0-9]*\z/', $value) === 1) {
+            return $this->positiveId((int) $value, $field);
+        }
+
+        throw new TaskValidationException("Identificador invalido: {$field}.");
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return array<string, mixed>
+     */
+    private function withUrgency(array $project): array
+    {
+        $project['urgency'] = $this->urgency->forProject(
+            is_string($project['due_on'] ?? null) ? (string) $project['due_on'] : null,
+            (string) ($project['status'] ?? 'active'),
+        );
+
+        return $project;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $projects
+     */
+    private function sortByDeadline(array &$projects): void
+    {
+        usort($projects, static function (array $left, array $right): int {
+            $leftDone = in_array((string) ($left['status'] ?? ''), ['completed', 'archived'], true);
+            $rightDone = in_array((string) ($right['status'] ?? ''), ['completed', 'archived'], true);
+
+            if ($leftDone !== $rightDone) {
+                return $leftDone <=> $rightDone;
+            }
+
+            $leftDeadline = $left['due_on'] ?? null;
+            $rightDeadline = $right['due_on'] ?? null;
+            $leftHasDeadline = is_string($leftDeadline) && $leftDeadline !== '';
+            $rightHasDeadline = is_string($rightDeadline) && $rightDeadline !== '';
+
+            if ($leftHasDeadline !== $rightHasDeadline) {
+                return $leftHasDeadline ? -1 : 1;
+            }
+
+            if ($leftHasDeadline && $rightHasDeadline && $leftDeadline !== $rightDeadline) {
+                return strcmp((string) $leftDeadline, (string) $rightDeadline);
+            }
+
+            return (int) ($left['id'] ?? 0) <=> (int) ($right['id'] ?? 0);
+        });
     }
 }

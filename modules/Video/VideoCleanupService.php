@@ -12,7 +12,6 @@ final class VideoCleanupService
         private readonly array $config,
         private readonly VideoExportJobRepository $jobs,
         private readonly ?VideoStorage $storage = null,
-        private readonly ?VideoTranscriptionRepository $transcriptions = null,
     ) {
     }
 
@@ -80,7 +79,6 @@ final class VideoCleanupService
         }
 
         $processingExportIds = $this->jobs->processingJobIds();
-        $processingTranscriptionIds = $this->transcriptions?->processingJobIds() ?? [];
         $cutoff = time() - 86400;
         $files = [];
         $iterator = new \DirectoryIterator($directory);
@@ -94,10 +92,6 @@ final class VideoCleanupService
 
             if (preg_match('/\Aexport_([1-9][0-9]*)_[0-9a-f]{16}\.tmp\.mp4\z/', $name, $matches) === 1) {
                 if (in_array((int) $matches[1], $processingExportIds, true) || $item->getMTime() >= $cutoff) {
-                    continue;
-                }
-            } elseif (preg_match('/\Atranscription_([1-9][0-9]*)_[0-9a-f]{16}(?:\.wav|\.json)\z/', $name, $matches) === 1) {
-                if (in_array((int) $matches[1], $processingTranscriptionIds, true) || $item->getMTime() >= $cutoff) {
                     continue;
                 }
             } else {

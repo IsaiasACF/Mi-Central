@@ -12,7 +12,7 @@ View::render('components/widget', [
     'emptyState' => 'Sin <pendientes>.',
     'link' => [
         'label' => 'Ver <mas>',
-        'url' => '/index.php?section=video-editor&unsafe=<tag>',
+        'url' => '/index.php?section=video&unsafe=<tag>',
     ],
     'modifier' => 'dashboard-card--video',
     'eyebrow' => 'Editor <video>',
@@ -32,7 +32,7 @@ $expected = [
     'Contenido &lt;strong&gt;seguro&lt;/strong&gt;',
     'Sin &lt;pendientes&gt;.',
     'Ver &lt;mas&gt;',
-    '/index.php?section=video-editor&amp;unsafe=&lt;tag&gt;',
+    '/index.php?section=video&amp;unsafe=&lt;tag&gt;',
     'Editor &lt;video&gt;',
     'dashboard-card dashboard-card--video',
     'class="empty-state"',

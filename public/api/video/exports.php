@@ -42,7 +42,7 @@ try {
         $videoId = videoExportsPositiveQueryId('video_id');
 
         if ($videoId === null) {
-            JsonResponse::send(['ok' => false, 'error' => 'Video requerido.'], 400);
+            JsonResponse::send(['ok' => true, 'data' => $service->listProcessed($userId)]);
         }
 
         JsonResponse::send(['ok' => true, 'data' => $service->list($userId, $videoId)]);

@@ -28,6 +28,7 @@ spl_autoload_register(static function (string $class) use ($basePath): void {
 $config = [
     'app' => require $basePath . '/config/app.php',
     'database' => require $basePath . '/config/database.php',
+    'collectors' => require $basePath . '/config/collectors.php',
     'video' => require $basePath . '/config/video.php',
 ];
 

@@ -24,9 +24,6 @@ services:
       SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
       FFMPEG_BIN: ${FFMPEG_BIN:-/usr/bin/ffmpeg}
       FFPROBE_BIN: ${FFPROBE_BIN:-/usr/bin/ffprobe}
-      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
-      WHISPER_MODELS_PATH: ${WHISPER_MODELS_PATH:-/var/www/html/storage/models/whisper}
-      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/var/www/html/storage/models/whisper/ggml-base.bin}
       VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
       TZ: ${APP_TIMEZONE:-America/Santiago}
     volumes:
@@ -78,9 +75,6 @@ services:
       SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
       FFMPEG_BIN: ${FFMPEG_BIN:-/usr/bin/ffmpeg}
       FFPROBE_BIN: ${FFPROBE_BIN:-/usr/bin/ffprobe}
-      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
-      WHISPER_MODELS_PATH: ${WHISPER_MODELS_PATH:-/var/www/html/storage/models/whisper}
-      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/var/www/html/storage/models/whisper/ggml-base.bin}
       VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
       TZ: ${APP_TIMEZONE:-America/Santiago}
     volumes:

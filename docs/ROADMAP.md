@@ -45,7 +45,7 @@ Este roadmap documenta fases previstas. No implica autorizacion para avanzar aut
 
 La fase actual no implementa aun envio automatico externo, Push, PWA ni centro completo de notificaciones.
 
-## Fase 4 - Amigos en la U
+## Fase 4 - Horarios
 
 - Amigos.
 - Universidad.

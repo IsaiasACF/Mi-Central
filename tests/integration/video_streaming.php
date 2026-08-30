@@ -210,19 +210,19 @@ try {
     video_stream_login($username, $password, $cookieFile);
     video_stream_login($otherUsername, $otherPassword, $otherCookieFile);
 
-    $page = video_stream_request('http://127.0.0.1/index.php?section=video-editor', 'GET', null, $cookieFile);
+    $page = video_stream_request('http://127.0.0.1/index.php?section=video', 'GET', null, $cookieFile);
     video_stream_assert($page['status'] === 200 && str_contains($page['body'], '04:37') && str_contains($page['body'], '1920&times;1080') && str_contains($page['body'], 'H.264 / AAC') && str_contains($page['body'], 'Listo'), 'Video list did not render ready metadata.');
     video_stream_assert(str_contains($page['body'], 'No se pudo analizar el video.') && str_contains($page['body'], 'Reintentar analisis'), 'Video list did not render failed metadata retry.');
     $csrf = video_stream_screen_csrf($page['body']);
 
-    $detail = video_stream_request('http://127.0.0.1/index.php?section=video-editor&id=' . $videoId, 'GET', null, $cookieFile);
+    $detail = video_stream_request('http://127.0.0.1/index.php?section=video&id=' . $videoId, 'GET', null, $cookieFile);
     video_stream_assert($detail['status'] === 200 && str_contains($detail['body'], '<video') && str_contains($detail['body'], '/video/stream.php?id=' . $videoId) && str_contains($detail['body'], 'data-video-metadata-state="ready"'), 'Video detail/player did not render ready metadata.');
     video_stream_assert(str_contains($detail['body'], 'Duracion') && str_contains($detail['body'], 'Resolucion') && str_contains($detail['body'], 'FPS') && str_contains($detail['body'], 'Bitrate'), 'Ready metadata cards were not rendered.');
 
-    $pendingDetail = video_stream_request('http://127.0.0.1/index.php?section=video-editor&id=' . $pendingVideoId, 'GET', null, $cookieFile);
+    $pendingDetail = video_stream_request('http://127.0.0.1/index.php?section=video&id=' . $pendingVideoId, 'GET', null, $cookieFile);
     video_stream_assert($pendingDetail['status'] === 200 && str_contains($pendingDetail['body'], 'Analizando informacion del video...') && !str_contains($pendingDetail['body'], '<dt>Duracion</dt>'), 'Pending detail rendered per-field placeholder metadata.');
 
-    $failedDetail = video_stream_request('http://127.0.0.1/index.php?section=video-editor&id=' . $failedId, 'GET', null, $cookieFile);
+    $failedDetail = video_stream_request('http://127.0.0.1/index.php?section=video&id=' . $failedId, 'GET', null, $cookieFile);
     video_stream_assert($failedDetail['status'] === 200 && str_contains($failedDetail['body'], 'No se pudo obtener la informacion tecnica del video.') && str_contains($failedDetail['body'], 'Reintentar analisis') && is_file($failedPath), 'Failed metadata state did not render or preserve original.');
 
     $retryForeign = video_stream_request('http://127.0.0.1/api/video/files.php?id=' . $otherVideoId . '&action=retry-metadata', 'POST', ['action' => 'retry-metadata'], $cookieFile, ['X-CSRF-Token: ' . $csrf]);
@@ -231,7 +231,7 @@ try {
     $retryOwn = video_stream_request('http://127.0.0.1/api/video/files.php?id=' . $failedId . '&action=retry-metadata', 'POST', ['action' => 'retry-metadata'], $cookieFile, ['X-CSRF-Token: ' . $csrf]);
     video_stream_assert($retryOwn['status'] === 200 && ($retryOwn['json']['data']['metadata_status'] ?? '') === 'pending' && is_file($failedPath), 'Retry metadata did not reset own failed video.');
 
-    $detailForDelete = video_stream_request('http://127.0.0.1/index.php?section=video-editor&id=' . $deleteVideoId, 'GET', null, $cookieFile);
+    $detailForDelete = video_stream_request('http://127.0.0.1/index.php?section=video&id=' . $deleteVideoId, 'GET', null, $cookieFile);
     video_stream_assert($detailForDelete['status'] === 200 && str_contains($detailForDelete['body'], 'data-video-action="delete"'), 'Detail delete button was not rendered.');
     $deleteCsrf = video_stream_screen_csrf($detailForDelete['body']);
 

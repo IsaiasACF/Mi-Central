@@ -300,7 +300,6 @@ try {
         'title' => 'Cafe con Tomas editado',
         'description' => 'El usuario cambio los datos antes de guardar.',
         'space_id' => (string) $amigosSpaceId,
-        'priority' => 'high',
         'starts_at' => '2026-08-12T14:40',
         'ends_at' => '2026-08-12T15:50',
         'due_at' => '',
@@ -309,7 +308,7 @@ try {
 
     $createdTask = $create['json']['data'];
     $createdTaskId = (int) ($createdTask['id'] ?? 0);
-    coincidence_org_assert((int) ($createdTask['space_id'] ?? 0) === $amigosSpaceId && ($createdTask['priority'] ?? '') === 'high', 'User-edited task data was not preserved.');
+    coincidence_org_assert((int) ($createdTask['space_id'] ?? 0) === $amigosSpaceId, 'User-edited task space was not preserved.');
     coincidence_org_assert(($createdTask['starts_at'] ?? '') === '2026-08-12 18:40:00' && ($createdTask['ends_at'] ?? '') === '2026-08-12 19:50:00', 'Task was not stored in UTC from local coincidence time.');
     coincidence_org_assert(($createdTask['starts_at_input'] ?? '') === '2026-08-12T14:40' && ($createdTask['ends_at_input'] ?? '') === '2026-08-12T15:50', 'Task did not round-trip to local coincidence time.');
     coincidence_org_assert($taskService->get($userId, $createdTaskId) !== null, 'Created task was not available through OrganizationTaskService.');

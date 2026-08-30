@@ -148,7 +148,6 @@ try {
         [
             'title' => 'Tarea desde API',
             'space_id' => $spaceId,
-            'priority' => 'high',
             'due_at' => '2026-08-15 12:00:00',
         ],
         $cookieFile,
@@ -161,7 +160,7 @@ try {
     assert_task_api($get['status'] === 200 && $get['json']['data']['title'] === 'Tarea desde API', 'Task API did not fetch a task.');
 
     $list = task_api_request(
-        'http://127.0.0.1/api/organization/tasks.php?space_id=' . $spaceId . '&priority=high',
+        'http://127.0.0.1/api/organization/tasks.php?space_id=' . $spaceId,
         'GET',
         null,
         $cookieFile
@@ -171,7 +170,7 @@ try {
     $update = task_api_request(
         'http://127.0.0.1/api/organization/tasks.php?id=' . $taskId,
         'PATCH',
-        ['title' => 'Tarea actualizada por API', 'priority' => 'normal'],
+        ['title' => 'Tarea actualizada por API', 'priority' => 'urgent'],
         $cookieFile,
         $csrfHeader
     );

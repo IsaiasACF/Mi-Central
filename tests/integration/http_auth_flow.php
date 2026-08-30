@@ -67,7 +67,7 @@ try {
         throw new RuntimeException('Index did not redirect unauthenticated request to login.');
     }
 
-    $internalSection = http_request('http://127.0.0.1/index.php?section=video-editor', 'GET', [], $cookieFile);
+    $internalSection = http_request('http://127.0.0.1/index.php?section=video', 'GET', [], $cookieFile);
 
     if ((int) $internalSection['status'] !== 302 || !str_contains($internalSection['headers'], 'Location: /login.php')) {
         throw new RuntimeException('Internal section did not redirect unauthenticated request to login.');
@@ -121,13 +121,13 @@ try {
         || !str_contains($authenticatedIndex['body'], 'Sesion iniciada como: ' . $username)
         || !str_contains($authenticatedIndex['body'], 'Resumen de hoy')
         || !str_contains($authenticatedIndex['body'], 'Bandeja rapida')
-        || !str_contains($authenticatedIndex['body'], 'No hay procesamientos recientes.')
+        || !str_contains($authenticatedIndex['body'], 'Aun no hay actividad de video.')
         || !str_contains($authenticatedIndex['body'], 'No hay proximos elementos con fecha.')
     ) {
         throw new RuntimeException('Authenticated index was not accessible.');
     }
 
-    $videoSection = http_request('http://127.0.0.1/index.php?section=video-editor', 'GET', [], $cookieFile);
+    $videoSection = http_request('http://127.0.0.1/index.php?section=video', 'GET', [], $cookieFile);
 
     if (
         (int) $videoSection['status'] !== 200

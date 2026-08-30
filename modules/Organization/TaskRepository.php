@@ -73,7 +73,7 @@ final class TaskRepository
         $where = ['user_id = :user_id'];
         $params = ['user_id' => $userId];
 
-        foreach (['space_id', 'project_id', 'parent_task_id', 'status', 'priority'] as $field) {
+        foreach (['space_id', 'project_id', 'parent_task_id', 'status'] as $field) {
             if (!array_key_exists($field, $filters)) {
                 continue;
             }
@@ -107,6 +107,17 @@ final class TaskRepository
         if (isset($filters['due_before'])) {
             $where[] = 'due_at < :due_before';
             $params['due_before'] = $filters['due_before'];
+        }
+
+        if (isset($filters['label_id'])) {
+            $where[] = 'EXISTS (
+                SELECT 1
+                FROM organization_task_labels task_labels
+                WHERE task_labels.task_id = organization_tasks.id
+                  AND task_labels.user_id = organization_tasks.user_id
+                  AND task_labels.label_id = :label_id
+            )';
+            $params['label_id'] = $filters['label_id'];
         }
 
         $statement = $this->pdo->prepare(

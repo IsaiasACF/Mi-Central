@@ -9,6 +9,7 @@ $projects = is_array($projects ?? null) ? $projects : [];
 $notes = is_array($notes ?? null) ? $notes : [];
 $reminders = is_array($reminders ?? null) ? $reminders : [];
 $calendar = is_array($calendar ?? null) ? $calendar : null;
+$labels = is_array($labels ?? null) ? $labels : [];
 $taskPrefill = is_array($taskPrefill ?? null) ? $taskPrefill : null;
 $selectedProject = is_array($selectedProject ?? null) ? $selectedProject : null;
 $selectedProjectTasks = is_array($selectedProjectTasks ?? null) ? $selectedProjectTasks : [];
@@ -17,7 +18,8 @@ $filters = array_merge([
     'tab' => 'tasks',
     'status' => 'pending',
     'space' => 'all',
-    'priority' => 'all',
+    'label' => 'all',
+    'sort' => 'deadline',
     'time' => 'all',
     'view' => 'month',
     'date' => '',
@@ -31,18 +33,6 @@ foreach ($spaces as $space) {
     $spaceNames[(string) $space['id']] = (string) $space['name'];
     $spaceIdsBySlug[(string) $space['slug']] = (string) $space['id'];
 }
-
-$priorityLabel = static function (?string $priority): string {
-    return match ($priority) {
-        'low' => 'Baja',
-        'high' => 'Alta',
-        default => 'Normal',
-    };
-};
-
-$taskStatusLabel = static function (?string $status): string {
-    return $status === 'completed' ? 'Completada' : 'Pendiente';
-};
 
 $projectStatusLabel = static function (?string $status): string {
     return match ($status) {
@@ -103,12 +93,36 @@ $noteSpaceLabel = static function (mixed $spaceId) use ($spaceNames): string {
     return $spaceNames[(string) $spaceId] ?? 'Espacio no disponible';
 };
 
-$dateTimeLabel = static function (mixed $value): string {
+$monthShortName = static function (int $month): string {
+    return [
+        1 => 'ene',
+        2 => 'feb',
+        3 => 'mar',
+        4 => 'abr',
+        5 => 'may',
+        6 => 'jun',
+        7 => 'jul',
+        8 => 'ago',
+        9 => 'sep',
+        10 => 'oct',
+        11 => 'nov',
+        12 => 'dic',
+    ][$month] ?? '';
+};
+
+$dateTimeLabel = static function (mixed $value) use ($monthShortName): string {
     if (!is_string($value) || $value === '') {
-        return 'Sin fecha';
+        return '';
     }
 
-    return substr($value, 0, 16);
+    $normalized = str_replace('T', ' ', substr($value, 0, 16));
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $normalized);
+
+    if (!$date instanceof DateTimeImmutable || $date->format('Y-m-d H:i') !== $normalized) {
+        return '';
+    }
+
+    return $date->format('j') . ' ' . $monthShortName((int) $date->format('n')) . ' ' . $date->format('Y') . ' · ' . $date->format('H:i');
 };
 
 $dateTimeInput = static function (mixed $value): string {
@@ -149,21 +163,193 @@ $reminderTargetLabel = static function (array $reminder): string {
     return 'Independiente';
 };
 
-$dateLabel = static function (mixed $value): string {
-    return is_string($value) && $value !== '' ? $value : 'sin fecha';
+$dateLabel = static function (mixed $value) use ($monthShortName): string {
+    if (!is_string($value) || $value === '') {
+        return '';
+    }
+
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+    if (!$date instanceof DateTimeImmutable || $date->format('Y-m-d') !== $value) {
+        return '';
+    }
+
+    return $date->format('j') . ' ' . $monthShortName((int) $date->format('n')) . ' ' . $date->format('Y');
+};
+
+$calendarDayFullLabel = static function (mixed $value): string {
+    if (!is_string($value) || $value === '') {
+        return '';
+    }
+
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+    if (!$date instanceof DateTimeImmutable || $date->format('Y-m-d') !== $value) {
+        return '';
+    }
+
+    $days = [
+        1 => 'Lunes',
+        2 => 'Martes',
+        3 => 'Miercoles',
+        4 => 'Jueves',
+        5 => 'Viernes',
+        6 => 'Sabado',
+        7 => 'Domingo',
+    ];
+    $months = [
+        1 => 'enero',
+        2 => 'febrero',
+        3 => 'marzo',
+        4 => 'abril',
+        5 => 'mayo',
+        6 => 'junio',
+        7 => 'julio',
+        8 => 'agosto',
+        9 => 'septiembre',
+        10 => 'octubre',
+        11 => 'noviembre',
+        12 => 'diciembre',
+    ];
+
+    return ($days[(int) $date->format('N')] ?? '')
+        . ' ' . $date->format('j')
+        . ' de ' . ($months[(int) $date->format('n')] ?? '');
+};
+
+$calendarWeekdayShort = static function (mixed $value): string {
+    return [
+        'Lun' => 'L',
+        'Mar' => 'M',
+        'Mie' => 'X',
+        'Jue' => 'J',
+        'Vie' => 'V',
+        'Sab' => 'S',
+        'Dom' => 'D',
+    ][(string) $value] ?? substr((string) $value, 0, 1);
+};
+
+$labelColor = static function (mixed $value): string {
+    $color = strtoupper((string) $value);
+
+    return preg_match('/\A#[0-9A-F]{6}\z/', $color) === 1 ? $color : '#2DD4BF';
+};
+
+$labelTextColor = static function (string $color): string {
+    $red = hexdec(substr($color, 1, 2)) / 255;
+    $green = hexdec(substr($color, 3, 2)) / 255;
+    $blue = hexdec(substr($color, 5, 2)) / 255;
+    $linear = static fn (float $channel): float => $channel <= 0.03928
+        ? $channel / 12.92
+        : (($channel + 0.055) / 1.055) ** 2.4;
+    $luminance = 0.2126 * $linear($red) + 0.7152 * $linear($green) + 0.0722 * $linear($blue);
+    $contrastWithDark = ($luminance + 0.05) / 0.05;
+    $contrastWithLight = 1.05 / ($luminance + 0.05);
+
+    return $contrastWithDark >= $contrastWithLight ? '#101418' : '#FFFFFF';
+};
+
+$labelIdsValue = static function (array $entityLabels): string {
+    $ids = [];
+
+    foreach ($entityLabels as $label) {
+        if (is_array($label) && isset($label['id'])) {
+            $ids[] = (string) $label['id'];
+        }
+    }
+
+    return implode(',', $ids);
+};
+
+$renderLabelChips = static function (array $entityLabels, int $limit = 0) use ($labelColor, $labelTextColor): void {
+    if ($entityLabels === []) {
+        return;
+    }
+
+    $visibleLabels = $limit > 0 ? array_slice($entityLabels, 0, $limit) : $entityLabels;
+    $remaining = $limit > 0 ? max(0, count($entityLabels) - count($visibleLabels)) : 0;
+    ?>
+    <span class="organization-labels">
+        <?php foreach ($visibleLabels as $label): ?>
+            <?php
+            $color = $labelColor($label['color'] ?? null);
+            $textColor = $labelTextColor($color);
+            ?>
+            <span
+                class="organization-label organization-label-chip"
+                data-label-color="<?= View::escape($color) ?>"
+                style="--label-color: <?= View::escape($color) ?>; --label-text-color: <?= View::escape($textColor) ?>"
+            ><?= View::escape($label['name'] ?? '') ?></span>
+        <?php endforeach; ?>
+        <?php if ($remaining > 0): ?>
+            <span class="organization-label-chip organization-label-chip--more">+<?= $remaining ?></span>
+        <?php endif; ?>
+    </span>
+    <?php
+};
+
+$renderLabelPicker = static function (array $labels, string $name = 'label_ids[]') use ($labelColor, $labelTextColor): void {
+    ?>
+    <fieldset class="label-picker" data-label-picker>
+        <legend>Etiquetas</legend>
+        <div class="label-picker__options">
+            <?php if ($labels === []): ?>
+                <p class="muted">Sin etiquetas creadas.</p>
+            <?php endif; ?>
+            <?php foreach ($labels as $label): ?>
+                <?php
+                $color = $labelColor($label['color'] ?? null);
+                $textColor = $labelTextColor($color);
+                ?>
+                <label class="label-picker__option">
+                    <input type="checkbox" name="<?= View::escape($name) ?>" value="<?= View::escape($label['id']) ?>">
+                    <span
+                        class="organization-label organization-label-chip"
+                        data-label-color="<?= View::escape($color) ?>"
+                        style="--label-color: <?= View::escape($color) ?>; --label-text-color: <?= View::escape($textColor) ?>"
+                    ><?= View::escape($label['name']) ?></span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+    </fieldset>
+    <?php
+};
+
+$renderUrgency = static function (?array $urgency, string $kind, string $status): void {
+    if ($urgency === null) {
+        return;
+    }
+
+    if ($status === 'completed' || ($kind === 'project' && $status === 'archived')) {
+        return;
+    }
+
+    $level = preg_replace('/[^a-z0-9-]/', '', (string) ($urgency['level'] ?? 'neutral')) ?: 'neutral';
+    $deadline = (string) ($urgency['deadline_input'] ?? '');
+    ?>
+    <span
+        class="deadline-urgency deadline-urgency--<?= View::escape($level) ?>"
+        data-deadline-urgency
+        data-deadline-kind="<?= View::escape($kind) ?>"
+        data-deadline-status="<?= View::escape($status) ?>"
+        data-deadline-at="<?= View::escape($deadline) ?>"
+    ><?= View::escape($urgency['label'] ?? '') ?></span>
+    <?php
 };
 
 $taskHasFilters = $filters['status'] !== 'pending'
     || $filters['space'] !== 'all'
-    || $filters['priority'] !== 'all'
+    || $filters['label'] !== 'all'
     || $filters['time'] !== 'all';
 $taskEmptyText = $taskHasFilters ? 'No hay tareas que coincidan con estos filtros.' : 'No tienes tareas independientes todavia.';
-$projectEmptyText = $filters['status'] !== 'active' || $filters['space'] !== 'all'
+$projectEmptyText = $filters['status'] !== 'active' || $filters['space'] !== 'all' || $filters['label'] !== 'all'
     ? 'No hay proyectos que coincidan con estos filtros.'
     : 'No tienes proyectos todavia.';
-$noteEmptyText = $filters['space'] !== 'all'
+$noteEmptyText = $filters['status'] !== 'active'
+    || $filters['space'] !== 'all'
+    || $filters['label'] !== 'all'
     ? 'No hay notas que coincidan con este filtro.'
-    : 'No tienes notas todavia.';
+    : 'No tienes notas activas todavia.';
 $reminderEmptyText = match ($filters['status']) {
     'done' => 'No hay recordatorios completados o descartados.',
     'all' => 'No tienes recordatorios todavia.',
@@ -184,7 +370,8 @@ $organizationUrl = static function (array $overrides = []) use ($filters): strin
         'tab' => $filters['tab'],
         'space' => $filters['space'],
         'status' => $filters['status'],
-        'priority' => $filters['priority'],
+        'label' => $filters['label'],
+        'sort' => $filters['sort'],
         'time' => $filters['time'],
         'view' => $filters['view'],
         'date' => $filters['date'],
@@ -199,8 +386,9 @@ $organizationUrl = static function (array $overrides = []) use ($filters): strin
     $defaults = [
         'tab' => 'tasks',
         'space' => 'all',
-        'status' => ($query['tab'] ?? 'tasks') === 'projects' ? 'active' : ((($query['tab'] ?? 'tasks') === 'notes' || ($query['tab'] ?? 'tasks') === 'calendar') ? 'all' : 'pending'),
-        'priority' => 'all',
+        'status' => ($query['tab'] ?? 'tasks') === 'projects' ? 'active' : (($query['tab'] ?? 'tasks') === 'notes' ? 'active' : ((in_array(($query['tab'] ?? 'tasks'), ['calendar', 'labels'], true)) ? 'all' : 'pending')),
+        'label' => 'all',
+        'sort' => 'deadline',
         'time' => 'all',
         'view' => 'month',
         'date' => '',
@@ -217,15 +405,16 @@ $organizationUrl = static function (array $overrides = []) use ($filters): strin
 $tabUrl = static function (string $tab) use ($organizationUrl): string {
     return $organizationUrl([
         'tab' => $tab,
-        'status' => $tab === 'projects' ? 'active' : ($tab === 'tasks' || $tab === 'reminders' ? 'pending' : 'all'),
-        'priority' => 'all',
+        'status' => $tab === 'projects' ? 'active' : ($tab === 'notes' ? 'active' : ($tab === 'tasks' || $tab === 'reminders' ? 'pending' : 'all')),
+        'label' => 'all',
+        'sort' => 'deadline',
         'time' => 'all',
         'project' => null,
         'view' => $tab === 'calendar' ? 'month' : null,
         'date' => null,
     ]);
 };
-$renderTask = static function (array $task, bool $isSubtask = false) use ($spaceLabel, $priorityLabel, $dateTimeLabel, $dateTimeInput, $taskStatusLabel): void {
+$renderTask = static function (array $task, bool $isSubtask = false) use ($spaceLabel, $dateTimeLabel, $dateTimeInput, $labelIdsValue, $renderLabelChips, $renderUrgency): void {
     $taskId = (string) $task['id'];
     $status = (string) $task['status'];
     $spaceId = $task['space_id'] === null ? '' : (string) $task['space_id'];
@@ -243,7 +432,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
         data-space-id="<?= View::escape($spaceId) ?>"
         data-project-id="<?= View::escape($projectId) ?>"
         data-parent-task-id="<?= View::escape($parentTaskId) ?>"
-        data-priority="<?= View::escape($task['priority']) ?>"
+        data-label-ids="<?= View::escape($labelIdsValue($task['labels'] ?? [])) ?>"
         data-starts-at="<?= View::escape($task['starts_at_input'] ?? $dateTimeInput($startsAtLocal)) ?>"
         data-ends-at="<?= View::escape($task['ends_at_input'] ?? $dateTimeInput($endsAtLocal)) ?>"
         data-due-at="<?= View::escape($task['due_at_input'] ?? $dateTimeInput($dueAtLocal)) ?>"
@@ -255,12 +444,21 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                 <p><?= View::escape($task['description']) ?></p>
             <?php endif; ?>
             <div class="task-meta">
-                <span><?= View::escape($spaceLabel($task['space_id'] ?? null)) ?></span>
-                <span>Prioridad <?= View::escape($priorityLabel((string) $task['priority'])) ?></span>
-                <span>Inicio <?= View::escape($dateTimeLabel($startsAtLocal)) ?></span>
-                <span>Fin <?= View::escape($dateTimeLabel($endsAtLocal)) ?></span>
-                <span>Limite <?= View::escape($dateTimeLabel($dueAtLocal)) ?></span>
-                <span><?= View::escape($taskStatusLabel($status)) ?></span>
+                <span class="organization-space"><?= View::escape($spaceLabel($task['space_id'] ?? null)) ?></span>
+                <?php $renderLabelChips($task['labels'] ?? [], 3); ?>
+                <?php $renderUrgency(is_array($task['urgency'] ?? null) ? $task['urgency'] : null, 'task', $status); ?>
+                <?php if (($startsAtLabel = $dateTimeLabel($startsAtLocal)) !== ''): ?>
+                    <span class="organization-meta-token">Inicio: <?= View::escape($startsAtLabel) ?></span>
+                <?php endif; ?>
+                <?php if (($endsAtLabel = $dateTimeLabel($endsAtLocal)) !== ''): ?>
+                    <span class="organization-meta-token">Fin: <?= View::escape($endsAtLabel) ?></span>
+                <?php endif; ?>
+                <?php if (($dueAtLabel = $dateTimeLabel($dueAtLocal)) !== ''): ?>
+                    <span class="organization-meta-token">Limite: <?= View::escape($dueAtLabel) ?></span>
+                <?php endif; ?>
+                <?php if ($status === 'completed'): ?>
+                    <span class="completion-state">Completada</span>
+                <?php endif; ?>
             </div>
         </div>
         <div class="task-actions">
@@ -270,7 +468,6 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
             <?php if (!$isSubtask && $projectId !== ''): ?>
                 <button class="button button--secondary" type="button" data-task-action="subtask">Agregar subtarea</button>
             <?php endif; ?>
-            <button class="button button--secondary" type="button" data-task-action="reminder">Agregar recordatorio</button>
             <button class="button button--secondary" type="button" data-task-action="edit">Editar</button>
             <button class="button button--danger" type="button" data-task-action="delete">Eliminar</button>
         </div>
@@ -288,7 +485,8 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
     data-csrf-token="<?= View::escape(Csrf::token()) ?>"
     data-default-status-filter="<?= View::escape($filters['time'] === 'all' ? $filters['status'] : 'pending') ?>"
     data-default-space-filter="<?= View::escape($filters['space'] === 'inbox' ? 'none' : ($spaceIdsBySlug[$filters['space']] ?? 'all')) ?>"
-    data-default-priority-filter="<?= View::escape($filters['priority']) ?>"
+    data-default-label-filter="<?= View::escape($filters['label']) ?>"
+    data-default-sort="<?= View::escape($filters['sort']) ?>"
     data-default-due-from="<?= View::escape($filters['due_from'] ?? '') ?>"
     data-default-due-to="<?= View::escape($filters['due_to'] ?? '') ?>"
     data-default-due-before="<?= View::escape($filters['due_before'] ?? '') ?>"
@@ -311,6 +509,8 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
             <button class="button button--primary" type="button" data-note-new>+ Nueva nota</button>
         <?php elseif ($activeTab === 'reminders'): ?>
             <button class="button button--primary" type="button" data-reminder-new>+ Nuevo recordatorio</button>
+        <?php elseif ($activeTab === 'labels'): ?>
+            <button class="button button--primary" type="button" data-label-new>+ Nueva etiqueta</button>
         <?php endif; ?>
     </div>
 
@@ -320,6 +520,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
         <a class="organization-tab<?= $activeTab === 'notes' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('notes')) ?>" <?= $activeTab === 'notes' ? 'aria-current="page"' : '' ?>>Notas</a>
         <a class="organization-tab organization-tab--reminders<?= $activeTab === 'reminders' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('reminders')) ?>" <?= $activeTab === 'reminders' ? 'aria-current="page"' : '' ?>>Recordatorios</a>
         <a class="organization-tab organization-tab--calendar<?= $activeTab === 'calendar' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('calendar')) ?>" <?= $activeTab === 'calendar' ? 'aria-current="page"' : '' ?>>Calendario</a>
+        <a class="organization-tab<?= $activeTab === 'labels' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('labels')) ?>" <?= $activeTab === 'labels' ? 'aria-current="page"' : '' ?>>Etiquetas</a>
     </nav>
 
     <?php if ($filterError !== null): ?>
@@ -357,14 +558,6 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                     </label>
                     <p class="task-inherited-space" data-project-space-note hidden></p>
                     <label>
-                        <span>Prioridad</span>
-                        <select name="priority">
-                            <option value="normal">Normal</option>
-                            <option value="low">Baja</option>
-                            <option value="high">Alta</option>
-                        </select>
-                    </label>
-                    <label>
                         <span>Inicio</span>
                         <input name="starts_at" type="datetime-local">
                     </label>
@@ -377,6 +570,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                         <input name="due_at" type="datetime-local">
                     </label>
                 </div>
+                <?php $renderLabelPicker($labels); ?>
                 <div class="task-form__actions">
                     <button class="button button--primary" type="submit">Guardar tarea</button>
                 </div>
@@ -384,7 +578,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
         </section>
     <?php endif; ?>
 
-    <?php if ($activeTab === 'projects' || $selectedProject !== null): ?>
+    <?php if ($activeTab === 'projects' || $activeTab === 'calendar' || $selectedProject !== null): ?>
         <section class="task-editor" data-project-form-panel hidden>
             <form class="task-form" data-project-form>
                 <input type="hidden" name="project_id" value="">
@@ -426,6 +620,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                         <input name="due_on" type="date">
                     </label>
                 </div>
+                <?php $renderLabelPicker($labels, 'project_label_ids[]'); ?>
                 <div class="task-form__actions">
                     <button class="button button--primary" type="submit">Guardar proyecto</button>
                 </div>
@@ -460,8 +655,34 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                         </select>
                     </label>
                 </div>
+                <?php $renderLabelPicker($labels, 'note_label_ids[]'); ?>
                 <div class="task-form__actions">
                     <button class="button button--primary" type="submit">Guardar nota</button>
+                </div>
+            </form>
+        </section>
+    <?php endif; ?>
+
+    <?php if ($activeTab === 'labels'): ?>
+        <section class="task-editor" data-label-form-panel hidden>
+            <form class="task-form" data-label-form>
+                <input type="hidden" name="label_id" value="">
+                <div class="task-form__header">
+                    <h2 data-label-form-title>Nueva etiqueta</h2>
+                    <button class="button button--secondary" type="button" data-label-cancel>Cancelar</button>
+                </div>
+                <div class="task-form__grid task-form__grid--labels">
+                    <label>
+                        <span>Nombre</span>
+                        <input name="name" type="text" maxlength="120" required autocomplete="off">
+                    </label>
+                    <label>
+                        <span>Color <output data-label-color-output>#2DD4BF</output></span>
+                        <input name="color" type="color" value="#2DD4BF" required>
+                    </label>
+                </div>
+                <div class="task-form__actions">
+                    <button class="button button--primary" type="submit">Guardar etiqueta</button>
                 </div>
             </form>
         </section>
@@ -573,12 +794,21 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                     </select>
                 </label>
                 <label>
-                    <span>Prioridad</span>
-                    <select name="priority">
-                        <option value="all" <?= $filters['priority'] === 'all' ? 'selected' : '' ?>>Todas</option>
-                        <option value="low" <?= $filters['priority'] === 'low' ? 'selected' : '' ?>>Baja</option>
-                        <option value="normal" <?= $filters['priority'] === 'normal' ? 'selected' : '' ?>>Normal</option>
-                        <option value="high" <?= $filters['priority'] === 'high' ? 'selected' : '' ?>>Alta</option>
+                    <span>Etiqueta</span>
+                    <select name="label">
+                        <option value="all" <?= $filters['label'] === 'all' ? 'selected' : '' ?>>Todas</option>
+                        <?php foreach ($labels as $label): ?>
+                            <option value="<?= View::escape($label['id']) ?>" <?= $filters['label'] === (string) $label['id'] ? 'selected' : '' ?>>
+                                <?= View::escape($label['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>
+                    <span>Ordenar</span>
+                    <select name="sort">
+                        <option value="default" <?= $filters['sort'] === 'default' ? 'selected' : '' ?>>Manual</option>
+                        <option value="deadline" <?= $filters['sort'] === 'deadline' ? 'selected' : '' ?>>Por vencimiento</option>
                     </select>
                 </label>
                 <button class="button button--secondary" type="submit">Filtrar</button>
@@ -605,7 +835,14 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
             <form class="task-filters task-filters--notes" action="/index.php" method="get" data-note-filters>
                 <input type="hidden" name="section" value="organization">
                 <input type="hidden" name="tab" value="notes">
-                <input type="hidden" name="status" value="all">
+                <label>
+                    <span>Estado</span>
+                    <select name="status">
+                        <option value="active" <?= $filters['status'] === 'active' ? 'selected' : '' ?>>Activas</option>
+                        <option value="completed" <?= $filters['status'] === 'completed' ? 'selected' : '' ?>>Completadas</option>
+                        <option value="all" <?= $filters['status'] === 'all' ? 'selected' : '' ?>>Todas</option>
+                    </select>
+                </label>
                 <label>
                     <span>Espacio</span>
                     <select name="space">
@@ -619,6 +856,17 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                                 <?= $filters['space'] === $spaceSlug ? 'selected' : '' ?>
                             >
                                 <?= View::escape($space['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>
+                    <span>Etiqueta</span>
+                    <select name="label">
+                        <option value="all" <?= $filters['label'] === 'all' ? 'selected' : '' ?>>Todas</option>
+                        <?php foreach ($labels as $label): ?>
+                            <option value="<?= View::escape($label['id']) ?>" <?= $filters['label'] === (string) $label['id'] ? 'selected' : '' ?>>
+                                <?= View::escape($label['name']) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
@@ -639,11 +887,13 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
 
                 <?php foreach ($notes as $note): ?>
                     <article
-                        class="note-item"
+                        class="note-item<?= ($note['status'] ?? 'active') === 'completed' ? ' is-completed' : '' ?>"
                         data-note-id="<?= View::escape($note['id']) ?>"
                         data-title="<?= View::escape($note['title']) ?>"
                         data-content="<?= View::escape($note['content']) ?>"
                         data-space-id="<?= View::escape($note['space_id'] ?? '') ?>"
+                        data-label-ids="<?= View::escape($labelIdsValue($note['labels'] ?? [])) ?>"
+                        data-status="<?= View::escape($note['status'] ?? 'active') ?>"
                     >
                         <div class="task-item__main">
                             <h3><?= View::escape($note['title']) ?></h3>
@@ -651,10 +901,17 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                                 <p><?= nl2br(View::escape($note['content']), false) ?></p>
                             <?php endif; ?>
                             <div class="task-meta">
-                                <span><?= View::escape($noteSpaceLabel($note['space_id'] ?? null)) ?></span>
+                                <span class="organization-space"><?= View::escape($noteSpaceLabel($note['space_id'] ?? null)) ?></span>
+                                <?php $renderLabelChips($note['labels'] ?? [], 3); ?>
+                                <?php if (($note['status'] ?? 'active') === 'completed'): ?>
+                                    <span class="completion-state">Completada</span>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <div class="task-actions">
+                            <button class="button button--secondary" type="button" data-note-action="<?= ($note['status'] ?? 'active') === 'completed' ? 'reopen' : 'complete' ?>">
+                                <?= ($note['status'] ?? 'active') === 'completed' ? 'Reabrir' : 'Completar' ?>
+                            </button>
                             <button class="button button--secondary" type="button" data-note-action="edit">Editar</button>
                             <button class="button button--danger" type="button" data-note-action="delete">Eliminar</button>
                         </div>
@@ -774,21 +1031,83 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                     <?php
                     $dayItems = $calendarItemsByDate[(string) $day['date']] ?? [];
                     $dayClasses = 'calendar-day' . (!($day['in_current_month'] ?? true) ? ' calendar-day--muted' : '');
+                    $dayClasses .= !empty($day['is_today']) ? ' calendar-day--today' : '';
+                    $dayClasses .= !empty($day['is_selected']) ? ' calendar-day--selected' : '';
+                    $dayClasses .= $dayItems !== [] ? ' calendar-day--has-items' : '';
+                    $visibleIndicators = array_slice($dayItems, 0, 3);
+                    $hiddenIndicatorCount = max(0, count($dayItems) - count($visibleIndicators));
                     ?>
-                    <section class="<?= View::escape($dayClasses) ?>" aria-label="<?= View::escape((string) $day['date']) ?>">
+                    <section class="<?= View::escape($dayClasses) ?>"
+                        aria-label="<?= View::escape((string) $day['date']) ?>"
+                        data-calendar-day="<?= View::escape((string) $day['date']) ?>"
+                        data-calendar-day-label="<?= View::escape($calendarDayFullLabel((string) $day['date'])) ?>"
+                    >
                         <header class="calendar-day__header">
-                            <span><?= View::escape($day['weekday'] ?? '') ?></span>
+                            <span data-weekday-short="<?= View::escape($calendarWeekdayShort($day['weekday'] ?? '')) ?>"><?= View::escape($day['weekday'] ?? '') ?></span>
                             <time datetime="<?= View::escape($day['date']) ?>"><?= View::escape($day['day'] ?? '') ?></time>
                         </header>
+                        <?php if ($dayItems !== []): ?>
+                            <button
+                                class="calendar-day__mobile-open"
+                                type="button"
+                                data-calendar-day-open
+                                aria-label="Ver elementos de <?= View::escape($calendarDayFullLabel((string) $day['date'])) ?>"
+                                aria-haspopup="dialog"
+                                aria-expanded="false"
+                            ></button>
+                        <?php endif; ?>
+                        <div class="calendar-day__mobile-summary" aria-hidden="true">
+                            <?php foreach ($visibleIndicators as $item): ?>
+                                <span
+                                    class="calendar-day__dot calendar-day__dot--<?= View::escape($item['type'] ?? '') ?>"
+                                    style="--calendar-indicator-color: <?= View::escape((string) ($item['indicator_color'] ?? '')) ?>"
+                                ></span>
+                            <?php endforeach; ?>
+                            <?php if ($hiddenIndicatorCount > 0): ?>
+                                <span class="calendar-day__more">+<?= (int) $hiddenIndicatorCount ?></span>
+                            <?php endif; ?>
+                        </div>
                         <div class="calendar-day__items">
                             <?php foreach ($dayItems as $item): ?>
-                                <a class="calendar-item calendar-item--<?= View::escape($item['type'] ?? '') ?>" href="<?= View::escape($item['url'] ?? '#') ?>">
+                                <button
+                                    class="calendar-item calendar-item--<?= View::escape($item['type'] ?? '') ?>"
+                                    type="button"
+                                    data-calendar-item
+                                    data-entity-type="<?= View::escape($item['entity_type'] ?? '') ?>"
+                                    data-entity-id="<?= View::escape($item['entity_id'] ?? '') ?>"
+                                    data-calendar-url="<?= View::escape($item['url'] ?? '#') ?>"
+                                    style="--calendar-indicator-color: <?= View::escape((string) ($item['indicator_color'] ?? '')) ?>"
+                                    aria-haspopup="dialog"
+                                    aria-expanded="false"
+                                >
                                     <?= View::escape($item['label'] ?? '') ?>
-                                </a>
+                                    <?php if (($item['label_summary'] ?? '') !== ''): ?>
+                                        <span><?= View::escape($item['label_summary']) ?></span>
+                                    <?php endif; ?>
+                                </button>
                             <?php endforeach; ?>
                         </div>
                     </section>
                 <?php endforeach; ?>
+            </div>
+            <div
+                class="calendar-detail"
+                data-calendar-detail
+                role="dialog"
+                aria-modal="false"
+                aria-labelledby="calendar-detail-title"
+                tabindex="-1"
+                hidden
+            >
+                <div class="calendar-detail__header">
+                    <div>
+                        <p class="dashboard-card__eyebrow" data-calendar-detail-type>Elemento</p>
+                        <h3 id="calendar-detail-title" data-calendar-detail-title></h3>
+                    </div>
+                    <button class="button button--secondary calendar-detail__close" type="button" data-calendar-detail-close aria-label="Cerrar">X</button>
+                </div>
+                <div class="calendar-detail__body" data-calendar-detail-body></div>
+                <div class="task-actions task-actions--start calendar-detail__actions" data-calendar-detail-actions></div>
             </div>
         </section>
     <?php elseif ($activeTab === 'projects' && $selectedProject === null): ?>
@@ -817,6 +1136,24 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                         <option value="all" <?= $filters['status'] === 'all' ? 'selected' : '' ?>>Todos</option>
                     </select>
                 </label>
+                <label>
+                    <span>Etiqueta</span>
+                    <select name="label">
+                        <option value="all" <?= $filters['label'] === 'all' ? 'selected' : '' ?>>Todas</option>
+                        <?php foreach ($labels as $label): ?>
+                            <option value="<?= View::escape($label['id']) ?>" <?= $filters['label'] === (string) $label['id'] ? 'selected' : '' ?>>
+                                <?= View::escape($label['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>
+                    <span>Ordenar</span>
+                    <select name="sort">
+                        <option value="default" <?= $filters['sort'] === 'default' ? 'selected' : '' ?>>Por defecto</option>
+                        <option value="deadline" <?= $filters['sort'] === 'deadline' ? 'selected' : '' ?>>Por vencimiento</option>
+                    </select>
+                </label>
                 <button class="button button--secondary" type="submit">Filtrar</button>
             </form>
         </section>
@@ -840,6 +1177,7 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                             data-status="<?= View::escape($project['status']) ?>"
                             data-starts-on="<?= View::escape($project['starts_on'] ?? '') ?>"
                             data-due-on="<?= View::escape($project['due_on'] ?? '') ?>"
+                            data-label-ids="<?= View::escape($labelIdsValue($project['labels'] ?? [])) ?>"
                         >
                             <div class="project-card__header">
                                 <div>
@@ -849,14 +1187,19 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                                 <span><?= View::escape($projectStatusLabel((string) $project['status'])) ?></span>
                             </div>
                             <div class="task-meta">
-                                <span><?= View::escape($spaceLabel($project['space_id'] ?? null)) ?></span>
-                                <span>Inicio <?= View::escape($dateLabel($project['starts_on'] ?? null)) ?></span>
-                                <span>Limite <?= View::escape($dateLabel($project['due_on'] ?? null)) ?></span>
+                                <span class="organization-space"><?= View::escape($spaceLabel($project['space_id'] ?? null)) ?></span>
+                                <?php $renderLabelChips($project['labels'] ?? [], 3); ?>
+                                <?php $renderUrgency(is_array($project['urgency'] ?? null) ? $project['urgency'] : null, 'project', (string) $project['status']); ?>
+                                <?php if (($startsOnLabel = $dateLabel($project['starts_on'] ?? null)) !== ''): ?>
+                                    <span class="organization-meta-token">Inicio: <?= View::escape($startsOnLabel) ?></span>
+                                <?php endif; ?>
+                                <?php if (($dueOnLabel = $dateLabel($project['due_on'] ?? null)) !== ''): ?>
+                                    <span class="organization-meta-token">Limite: <?= View::escape($dueOnLabel) ?></span>
+                                <?php endif; ?>
                             </div>
                             <div class="task-actions">
                                 <a class="button button--secondary" href="/index.php?section=organization&tab=projects&project=<?= View::escape($project['id']) ?>">Ver</a>
                                 <button class="button button--secondary" type="button" data-project-action="edit">Editar</button>
-                                <button class="button button--secondary" type="button" data-project-action="reminder">Agregar recordatorio</button>
                                 <button class="button button--secondary" type="button" data-project-action="complete">Completar</button>
                                 <button class="button button--secondary" type="button" data-project-action="archive">Archivar</button>
                                 <button class="button button--danger" type="button" data-project-action="delete">Eliminar</button>
@@ -887,9 +1230,15 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                 <span class="task-count"><?= View::escape($projectStatusLabel((string) $selectedProject['status'])) ?></span>
             </div>
             <div class="task-meta">
-                <span><?= View::escape($spaceLabel($selectedProject['space_id'] ?? null)) ?></span>
-                <span>Inicio <?= View::escape($dateLabel($selectedProject['starts_on'] ?? null)) ?></span>
-                <span>Limite <?= View::escape($dateLabel($selectedProject['due_on'] ?? null)) ?></span>
+                <span class="organization-space"><?= View::escape($spaceLabel($selectedProject['space_id'] ?? null)) ?></span>
+                <?php $renderLabelChips($selectedProject['labels'] ?? [], 3); ?>
+                <?php $renderUrgency(is_array($selectedProject['urgency'] ?? null) ? $selectedProject['urgency'] : null, 'project', (string) $selectedProject['status']); ?>
+                <?php if (($selectedStartsOnLabel = $dateLabel($selectedProject['starts_on'] ?? null)) !== ''): ?>
+                    <span class="organization-meta-token">Inicio: <?= View::escape($selectedStartsOnLabel) ?></span>
+                <?php endif; ?>
+                <?php if (($selectedDueOnLabel = $dateLabel($selectedProject['due_on'] ?? null)) !== ''): ?>
+                    <span class="organization-meta-token">Limite: <?= View::escape($selectedDueOnLabel) ?></span>
+                <?php endif; ?>
             </div>
             <p class="project-progress">
                 <?= (int) $selectedProject['tasks_completed'] ?> de <?= (int) $selectedProject['tasks_total'] ?> tareas completadas
@@ -901,7 +1250,6 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
             </p>
             <div class="task-actions task-actions--start">
                 <button class="button button--primary" type="button" data-project-task-new>+ Tarea del proyecto</button>
-                <button class="button button--secondary" type="button" data-project-reminder-new>Agregar recordatorio</button>
             </div>
         </section>
 
@@ -932,6 +1280,48 @@ $renderTask = static function (array $task, bool $isSubtask = false) use ($space
                     }
                 }
                 ?>
+            </div>
+        </section>
+    <?php elseif ($activeTab === 'labels'): ?>
+        <section class="tasks-panel" aria-label="Lista de etiquetas" data-labels-panel data-api-url="/api/organization/labels.php">
+            <div class="tasks-list-header">
+                <h2>Etiquetas</h2>
+                <span class="task-count" data-label-count><?= count($labels) ?></span>
+            </div>
+            <div class="labels-list" data-label-list>
+                <?php if ($labels === []): ?>
+                    <?php View::render('components/empty-state', ['text' => 'No tienes etiquetas todavia.']); ?>
+                <?php endif; ?>
+
+                <?php foreach ($labels as $label): ?>
+                    <article
+                        class="label-item"
+                        data-label-id="<?= View::escape($label['id']) ?>"
+                        data-name="<?= View::escape($label['name']) ?>"
+                        data-color="<?= View::escape($label['color']) ?>"
+                    >
+                        <div class="task-item__main">
+                            <h3>
+                                <?php
+                                $color = $labelColor($label['color'] ?? null);
+                                $textColor = $labelTextColor($color);
+                                ?>
+                                <span
+                                    class="organization-label organization-label-chip"
+                                    data-label-color="<?= View::escape($color) ?>"
+                                    style="--label-color: <?= View::escape($color) ?>; --label-text-color: <?= View::escape($textColor) ?>"
+                                ><?= View::escape($label['name']) ?></span>
+                            </h3>
+                            <div class="task-meta">
+                                <span class="organization-meta-token"><?= View::escape($color) ?></span>
+                            </div>
+                        </div>
+                        <div class="task-actions">
+                            <button class="button button--secondary" type="button" data-label-action="edit">Editar</button>
+                            <button class="button button--danger" type="button" data-label-action="delete">Eliminar</button>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
             </div>
         </section>
     <?php endif; ?>

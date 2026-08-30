@@ -10,15 +10,27 @@ La seguridad debe considerarse desde el inicio, incluso cuando una funcionalidad
 
 La aplicacion requiere autenticacion para acceder a la pagina principal.
 
-El formulario de login vive en `public/login.php`. No existe registro publico, OAuth, recuperacion de contrasena ni roles en esta fase.
-
-Los mensajes de fallo de login son genericos:
+El formulario de login vive en `public/login.php`. El registro publico vive en `public/register.php` y crea cuentas activas inmediatamente. El flujo es:
 
 ```text
-Credenciales invalidas o acceso temporalmente bloqueado.
+Registro publico
+-> usuario activo
+-> login
+-> sesion
+-> datos aislados por user_id
+-> login permitido
 ```
 
-El mensaje no debe revelar si el usuario existe, si la contrasena es incorrecta o si la cuenta esta desactivada.
+`is_active` controla si una cuenta puede iniciar sesion despues de validar username y contrasena:
+
+- `is_active = 1`: cuenta puede iniciar sesion;
+- `is_active = 0`: cuenta desactivada, sin login.
+
+Si existen columnas heredadas como `approval_status`, `approved_at`, `approved_by_user_id` o `rejected_at`, se conservan por compatibilidad de migraciones y trazabilidad historica, pero ya no controlan el acceso. Las cuentas nuevas se guardan con `approval_status = approved` cuando esa columna existe.
+
+La administracion de usuarios esta dentro de `/index.php?section=settings&tab=users` y requiere `is_admin = 1` en una cuenta activa. No se hardcodean usernames. El comando CLI `make user-admin USERNAME=<username>` marca como administrador una cuenta existente; no crea cuentas nuevas. Esta administracion permite desactivar/reactivar usuarios, no aprobar registros.
+
+Los mensajes de fallo de login siguen evitando revelar si el username existe o si la contrasena fue incorrecta. Solo despues de verificar una contrasena correcta se muestra que una cuenta esta desactivada.
 
 ## Sesiones
 
@@ -33,6 +45,7 @@ Configuracion base:
 - regeneracion del identificador despues del login;
 - destruccion completa al cerrar sesion;
 - timeout de inactividad mediante `SESSION_IDLE_TIMEOUT`.
+- validacion de que la cuenta de sesion siga `is_active = 1` en la siguiente peticion.
 
 En desarrollo local con `http://localhost:8080`, `SESSION_SECURE` puede permanecer en `false`. En produccion con HTTPS debera configurarse en `true`.
 
@@ -59,11 +72,14 @@ Los tokens se generan con `random_bytes()`, se almacenan en sesion y se comparan
 Actualmente se aplica como minimo a:
 
 - login;
-- logout.
+- registro;
+- logout;
+- acciones administrativas de usuarios;
+- APIs internas que modifican estado.
 
 El logout solo debe aceptar `POST`.
 
-## Intentos de login
+## Intentos de login y registro
 
 Los intentos fallidos se registran en `login_attempts`.
 
@@ -73,7 +89,7 @@ Politica inicial:
 - ventana de 15 minutos;
 - evaluacion por username normalizado e IP directa del servidor web.
 
-No se usa CAPTCHA ni servicios externos.
+El registro publico reutiliza `login_attempts` con la clave interna `_register` para limitar solicitudes por IP durante la misma ventana. No se usa CAPTCHA ni servicios externos.
 
 ## Consultas preparadas
 

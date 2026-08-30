@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\Http;
 
+use App\Database\Connection;
+
 final class Session
 {
     public static function start(array $config): void
@@ -34,7 +36,37 @@ final class Session
 
     public static function isAuthenticated(): bool
     {
-        return isset($_SESSION['auth']['user_id'], $_SESSION['auth']['username']);
+        if (!isset($_SESSION['auth']['user_id'], $_SESSION['auth']['username'])) {
+            return false;
+        }
+
+        $userId = (int) ($_SESSION['auth']['user_id'] ?? 0);
+
+        if ($userId <= 0) {
+            unset($_SESSION['auth']);
+            return false;
+        }
+
+        try {
+            $statement = Connection::get()->prepare(
+                "SELECT 1
+                 FROM users
+                 WHERE id = :id
+                   AND is_active = 1
+                 LIMIT 1"
+            );
+            $statement->execute(['id' => $userId]);
+
+            if ($statement->fetchColumn() !== false) {
+                return true;
+            }
+        } catch (\Throwable) {
+            unset($_SESSION['auth']);
+            return false;
+        }
+
+        unset($_SESSION['auth']);
+        return false;
     }
 
     public static function user(): ?array

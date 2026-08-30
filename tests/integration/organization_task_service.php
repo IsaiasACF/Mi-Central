@@ -94,7 +94,6 @@ try {
 
     $inboxTask = $service->create($userId, [
         'title' => 'Tarea de bandeja',
-        'priority' => 'normal',
         'starts_at' => '2026-08-10 14:00:00',
         'ends_at' => '2026-08-10 14:30:00',
         'due_at' => '2026-08-10 15:00:00',
@@ -107,7 +106,6 @@ try {
     $spaceTask = $service->create($userId, [
         'title' => 'Tarea con espacio',
         'space_id' => $spaceId,
-        'priority' => 'high',
     ]);
     assert_task_service((int) $spaceTask['space_id'] === $spaceId, 'Task was not associated with the user space.');
 
@@ -115,7 +113,6 @@ try {
         'title' => 'Tarea de proyecto',
         'space_id' => $spaceId,
         'project_id' => $projectId,
-        'priority' => 'low',
     ]);
     assert_task_service((int) $projectTask['project_id'] === $projectId, 'Task was not associated with the project.');
 
@@ -125,8 +122,8 @@ try {
     $filteredBySpace = $service->list($userId, ['space_id' => $spaceId]);
     assert_task_service(count($filteredBySpace) >= 2, 'Listing by space did not return expected tasks.');
 
-    $filteredByProject = $service->list($userId, ['project_id' => $projectId, 'priority' => 'low']);
-    assert_task_service(count($filteredByProject) === 1, 'Listing by project and priority returned unexpected tasks.');
+    $filteredByProject = $service->list($userId, ['project_id' => $projectId]);
+    assert_task_service(count($filteredByProject) === 1, 'Listing by project returned unexpected tasks.');
 
     $independentTasks = $service->list($userId, ['project_id' => 'none', 'parent_task_id' => 'none']);
     $independentTitles = array_column($independentTasks, 'title');
@@ -142,13 +139,12 @@ try {
 
     $updated = $service->update($userId, (int) $projectTask['id'], [
         'title' => 'Tarea actualizada',
-        'priority' => 'high',
         'starts_at' => '2026-08-12 08:30:00',
         'ends_at' => '2026-08-12 09:00:00',
         'due_at' => '2026-08-12 09:30:00',
     ]);
     assert_task_service(
-        is_array($updated) && $updated['title'] === 'Tarea actualizada' && $updated['priority'] === 'high' && $updated['ends_at'] === '2026-08-12 13:00:00' && $updated['ends_at_local'] === '2026-08-12 09:00:00',
+        is_array($updated) && $updated['title'] === 'Tarea actualizada' && $updated['priority'] === 'normal' && $updated['ends_at'] === '2026-08-12 13:00:00' && $updated['ends_at_local'] === '2026-08-12 09:00:00',
         'Task update did not persist editable fields.'
     );
 
@@ -179,10 +175,8 @@ try {
         static fn () => $service->update($userId, (int) $parent['id'], ['parent_task_id' => (int) $child['id']]),
         'Parent cycle was not rejected.'
     );
-    expect_task_validation(
-        static fn () => $service->create($userId, ['title' => 'Prioridad invalida', 'priority' => 'urgent']),
-        'Invalid priority was not rejected.'
-    );
+    $legacyPriority = $service->create($userId, ['title' => 'Prioridad legacy ignorada', 'priority' => 'urgent']);
+    assert_task_service($legacyPriority['priority'] === 'normal', 'Legacy priority input was not ignored.');
     expect_task_validation(
         static fn () => $service->create($userId, [
             'title' => 'Rango invalido',

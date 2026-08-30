@@ -32,7 +32,10 @@ $recentNotifications = is_array($notifications['recent'] ?? null) ? $notificatio
                 aria-controls="notification-panel"
                 data-notification-toggle
             >
-                <span aria-hidden="true">🔔</span>
+                <svg class="notification-bell__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+                    <path d="M10 21h4"></path>
+                </svg>
                 <span class="notification-bell__count" data-notification-count <?= $notificationUnreadCount > 0 ? '' : 'hidden' ?>>
                     <?= View::escape((string) $notificationUnreadCount) ?>
                 </span>
@@ -48,8 +51,9 @@ $recentNotifications = is_array($notifications['recent'] ?? null) ? $notificatio
                         $isRead = (bool) ($notification['is_read'] ?? false);
                         $targetUrl = is_string($notification['target_url'] ?? null) ? (string) $notification['target_url'] : null;
                         ?>
-                        <article class="notification-item<?= $isRead ? ' is-read' : ' is-unread' ?>" data-notification-id="<?= View::escape((string) ($notification['id'] ?? '')) ?>">
+                        <article class="notification-item<?= $isRead ? ' is-read' : ' is-unread' ?>" data-notification-id="<?= View::escape((string) ($notification['id'] ?? '')) ?>" data-source-module="<?= View::escape((string) ($notification['source_module'] ?? '')) ?>">
                             <div class="notification-item__main">
+                                <p class="dashboard-card__eyebrow"><?= View::escape($notification['type_label'] ?? 'Actividad') ?></p>
                                 <h3><?= View::escape($notification['title'] ?? '') ?></h3>
                                 <?php if (is_string($notification['message'] ?? null) && $notification['message'] !== ''): ?>
                                     <p><?= View::escape($notification['message']) ?></p>

@@ -67,6 +67,10 @@ try {
         'organization_projects',
         'organization_tasks',
         'organization_notes',
+        'organization_labels',
+        'organization_task_labels',
+        'organization_project_labels',
+        'organization_note_labels',
         'organization_reminders',
         'notifications',
         'organization_events',
@@ -84,13 +88,25 @@ try {
         }
     }
 
+    foreach (['id', 'user_id', 'name', 'color', 'created_at', 'updated_at'] as $labelColumn) {
+        if (!column_exists($pdo, 'organization_labels', $labelColumn)) {
+            throw new RuntimeException("Missing organization label column: {$labelColumn}");
+        }
+    }
+
     foreach (['task_id', 'project_id', 'remind_at', 'status', 'recurrence_type', 'recurrence_interval', 'recurrence_until', 'next_remind_at'] as $reminderColumn) {
         if (!column_exists($pdo, 'organization_reminders', $reminderColumn)) {
             throw new RuntimeException("Missing reminder column: {$reminderColumn}");
         }
     }
 
-    foreach (['user_id', 'reminder_id', 'type', 'title', 'message', 'scheduled_at', 'read_at'] as $notificationColumn) {
+    foreach (['status', 'completed_at'] as $noteColumn) {
+        if (!column_exists($pdo, 'organization_notes', $noteColumn)) {
+            throw new RuntimeException("Missing note column: {$noteColumn}");
+        }
+    }
+
+    foreach (['user_id', 'reminder_id', 'type', 'source_module', 'entity_type', 'entity_id', 'dedupe_key', 'title', 'message', 'scheduled_at', 'read_at'] as $notificationColumn) {
         if (!column_exists($pdo, 'notifications', $notificationColumn)) {
             throw new RuntimeException("Missing notification column: {$notificationColumn}");
         }
@@ -234,6 +250,49 @@ try {
         'category_id' => $categoryId,
         'title' => 'Nota de prueba',
         'content' => 'Contenido de prueba',
+    ]);
+    $noteId = (int) $pdo->lastInsertId();
+
+    $statement = $pdo->prepare(
+        'INSERT INTO organization_labels (user_id, name, normalized_name, color)
+         VALUES (:user_id, :name, :normalized_name, :color)'
+    );
+    $statement->execute([
+        'user_id' => $userId,
+        'name' => 'INF295',
+        'normalized_name' => 'inf295',
+        'color' => '#3366CC',
+    ]);
+    $labelId = (int) $pdo->lastInsertId();
+
+    $statement = $pdo->prepare(
+        'INSERT INTO organization_task_labels (user_id, task_id, label_id)
+         VALUES (:user_id, :task_id, :label_id)'
+    );
+    $statement->execute([
+        'user_id' => $userId,
+        'task_id' => $projectTaskId,
+        'label_id' => $labelId,
+    ]);
+
+    $statement = $pdo->prepare(
+        'INSERT INTO organization_project_labels (user_id, project_id, label_id)
+         VALUES (:user_id, :project_id, :label_id)'
+    );
+    $statement->execute([
+        'user_id' => $userId,
+        'project_id' => $projectId,
+        'label_id' => $labelId,
+    ]);
+
+    $statement = $pdo->prepare(
+        'INSERT INTO organization_note_labels (user_id, note_id, label_id)
+         VALUES (:user_id, :note_id, :label_id)'
+    );
+    $statement->execute([
+        'user_id' => $userId,
+        'note_id' => $noteId,
+        'label_id' => $labelId,
     ]);
 
     $statement = $pdo->prepare(

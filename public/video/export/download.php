@@ -42,6 +42,18 @@ if ($job === null || (string) ($job['status'] ?? '') !== 'completed') {
 
 $videoConfig = is_array($config['video'] ?? null) ? $config['video'] : [];
 $storage = new VideoStorage($videoConfig);
+$service = new VideoExportService(
+    new VideoRepository($pdo),
+    new VideoEditorService(new VideoRepository($pdo), new VideoCutPointRepository($pdo), new VideoEditSegmentRepository($pdo)),
+    $repository,
+    $storage,
+);
+
+if ($service->isExpired($job)) {
+    http_response_code(404);
+    exit;
+}
+
 $path = $storage->pathForExportJob($job);
 
 if ($path === null) {
@@ -55,13 +67,6 @@ if (!is_int($size) || $size <= 0) {
     http_response_code(404);
     exit;
 }
-
-$service = new VideoExportService(
-    new VideoRepository($pdo),
-    new VideoEditorService(new VideoRepository($pdo), new VideoCutPointRepository($pdo), new VideoEditSegmentRepository($pdo)),
-    $repository,
-    $storage,
-);
 
 http_response_code(200);
 header('Content-Type: video/mp4');

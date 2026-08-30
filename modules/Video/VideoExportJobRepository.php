@@ -63,6 +63,34 @@ final class VideoExportJobRepository
     }
 
     /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function listForUser(int $userId, int $limit = 100): array
+    {
+        $limit = max(1, min(200, $limit));
+        $statement = $this->pdo->prepare(
+            'SELECT ' . self::JOB_COLUMNS . ',
+                    vf.original_name AS video_original_name
+             FROM video_export_jobs vej
+             INNER JOIN video_files vf ON vf.id = vej.video_id AND vf.user_id = vej.user_id
+             WHERE vej.user_id = :user_id
+             ORDER BY vej.created_at DESC, vej.id DESC
+             LIMIT ' . $limit
+        );
+        $statement->execute(['user_id' => $userId]);
+
+        return $statement->fetchAll();
+    }
+
+    public function countForUser(int $userId): int
+    {
+        $statement = $this->pdo->prepare('SELECT COUNT(*) FROM video_export_jobs WHERE user_id = :user_id');
+        $statement->execute(['user_id' => $userId]);
+
+        return (int) $statement->fetchColumn();
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function findForUser(int $userId, int $jobId): ?array
@@ -334,5 +362,18 @@ final class VideoExportJobRepository
         }
 
         return max(0.0, min(100.0, round($percent, 2)));
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name = :table'
+        );
+        $statement->execute(['table' => $table]);
+
+        return (int) $statement->fetchColumn() === 1;
     }
 }

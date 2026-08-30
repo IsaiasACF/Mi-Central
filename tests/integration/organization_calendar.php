@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 use App\Database\Connection;
 use App\Services\AuthService;
+use App\Support\DateTimeHelper;
 use Modules\Organization\CalendarRepository;
 use Modules\Organization\CalendarService;
 use Modules\Organization\ProjectRepository;
@@ -17,7 +18,8 @@ $pdo = Connection::get();
 $auth = new AuthService($pdo);
 $taskService = new TaskService(new TaskRepository($pdo));
 $projectService = new ProjectService(new ProjectRepository($pdo));
-$calendarService = new CalendarService(new CalendarRepository($pdo), 'America/Santiago');
+$calendarRepository = new CalendarRepository($pdo);
+$calendarService = new CalendarService($calendarRepository, 'America/Santiago');
 $spaceRepository = new SpaceRepository($pdo);
 $username = 'test_calendar_' . bin2hex(random_bytes(4));
 $password = 'test-secret-' . bin2hex(random_bytes(8));
@@ -180,6 +182,8 @@ try {
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-12'], JSON_THROW_ON_ERROR), 'Presentacion'), 'Scheduled task did not appear.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-12'], JSON_THROW_ON_ERROR), 'Vence: Entrega informe'), 'Due task did not appear as due item.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-23'], JSON_THROW_ON_ERROR), 'Demo proyecto'), 'Project task did not appear.');
+    calendar_assert(str_contains(json_encode($itemsByDate['2026-08-12'], JSON_THROW_ON_ERROR), '"entity_type":"task"'), 'Task calendar item did not expose entity type.');
+    calendar_assert(str_contains(json_encode($itemsByDate['2026-08-12'], JSON_THROW_ON_ERROR), '"entity_id":' . (int) $scheduled['id']), 'Task calendar item did not expose entity id.');
     calendar_assert(!str_contains(json_encode($itemsByDate, JSON_THROW_ON_ERROR), 'Tarea sin fecha calendario'), 'Task without dates appeared in calendar.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-13'], JSON_THROW_ON_ERROR), 'Actividad varios dias'), 'Multi-day task did not appear on range start day.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-14'], JSON_THROW_ON_ERROR), 'Actividad varios dias'), 'Multi-day task did not appear on intermediate day.');
@@ -188,6 +192,23 @@ try {
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-30'] ?? [], JSON_THROW_ON_ERROR), 'Proyecto Redes'), 'Project did not appear on range end day.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-14'], JSON_THROW_ON_ERROR), 'Rango cruza dos semanas'), 'Two-week task did not appear before week break.');
     calendar_assert(str_contains(json_encode($itemsByDate['2026-08-18'] ?? [], JSON_THROW_ON_ERROR), 'Rango cruza dos semanas'), 'Two-week task did not appear after week break.');
+
+    $fixedCalendar = new CalendarService(
+        $calendarRepository,
+        'America/Santiago',
+        null,
+        new DateTimeImmutable('2026-08-13 02:30:00', DateTimeHelper::utcTimezone()),
+    );
+    $fixedMonth = $fixedCalendar->view($userId, 'month', '2026-08-12');
+    $todayDays = array_values(array_filter(
+        $fixedMonth['days'],
+        static fn (array $day): bool => !empty($day['is_today'])
+    ));
+    calendar_assert(count($todayDays) === 1 && $todayDays[0]['date'] === '2026-08-12', 'Calendar did not detect today in America/Santiago.');
+    calendar_assert(!empty($todayDays[0]['is_selected']), 'Today and selected day did not coexist.');
+    calendar_assert(count(array_filter($fixedMonth['days'], static fn (array $day): bool => !empty($day['is_today']))) < count($fixedMonth['days']), 'Current month days were all marked as today.');
+    $fixedWeek = $fixedCalendar->view($userId, 'week', '2026-08-12');
+    calendar_assert(count(array_filter($fixedWeek['days'], static fn (array $day): bool => !empty($day['is_today']))) === 1, 'Weekly calendar did not mark exactly one today.');
 
     $loginPage = calendar_request('http://127.0.0.1/login.php', 'GET', null, $cookieFile);
     $login = calendar_form_request('http://127.0.0.1/login.php', [
@@ -207,9 +228,13 @@ try {
     calendar_assert(!str_contains($monthPage['body'], 'calendar-week__ranges'), 'Range lane was rendered outside the daily grid.');
     calendar_assert(!str_contains($monthPage['body'], 'calendar-range'), 'Continuous range bar markup was rendered.');
     calendar_assert(
-        preg_match('/<section class="calendar-day[^"]*".*calendar-item calendar-item--project.*Proyecto Proyecto Redes.*<\/section>/s', $monthPage['body']) === 1,
+        preg_match('/<section class="calendar-day[^"]*".*<button[^>]*class="calendar-item calendar-item--project"[^>]*>.*Proyecto Proyecto Redes.*<\/button>.*<\/section>/s', $monthPage['body']) === 1,
         'Project chip was not rendered inside a day cell.'
     );
+    calendar_assert(str_contains($monthPage['body'], 'data-calendar-detail') && str_contains($monthPage['body'], 'role="dialog"'), 'Calendar detail popover was not rendered.');
+    calendar_assert(str_contains($monthPage['body'], 'data-calendar-item') && str_contains($monthPage['body'], 'aria-haspopup="dialog"'), 'Calendar items were not rendered as interactive popover triggers.');
+    calendar_assert(str_contains($monthPage['body'], 'data-entity-type="task"') && str_contains($monthPage['body'], 'data-entity-id="' . (int) $scheduled['id'] . '"'), 'Task calendar trigger did not expose safe entity identifiers.');
+    calendar_assert(str_contains($monthPage['body'], 'data-entity-type="project"') && str_contains($monthPage['body'], 'data-entity-id="' . $projectId . '"'), 'Project calendar trigger did not expose safe entity identifiers.');
     calendar_assert(!str_contains($monthPage['body'], 'Tarea sin fecha calendario'), 'Task without dates appeared in monthly page.');
     calendar_assert(str_contains($monthPage['body'], 'edit_task=' . (int) $scheduled['id']), 'Scheduled task link did not target edit flow.');
     calendar_assert(str_contains($monthPage['body'], 'edit_task=' . (int) $multiDay['id']), 'Multi-day task range did not keep clickable task link.');
@@ -224,6 +249,7 @@ try {
     calendar_assert($weekPage['status'] === 200, 'Weekly calendar page did not load.');
     calendar_assert(str_contains($weekPage['body'], '10/08/2026 - 16/08/2026'), 'Weekly calendar range title was not rendered.');
     calendar_assert(str_contains($weekPage['body'], 'Actividad varios dias'), 'Weekly calendar did not show multi-day task.');
+    calendar_assert(str_contains($weekPage['body'], 'data-calendar-item') && str_contains($weekPage['body'], 'data-calendar-detail'), 'Weekly calendar did not render popover triggers and detail.');
 
     echo "Organization calendar: OK\n";
     $exitCode = 0;

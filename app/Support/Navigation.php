@@ -13,25 +13,10 @@ final class Navigation
                 'items' => [
                     self::item('home', 'Inicio', 'Mi Central', 'Dashboard en preparacion.', 'Fase 1'),
                     self::item('organization', 'Organizacion', 'Organizacion', 'Tareas y Bandeja en una sola vista.', 'Fase 2'),
-                    self::item('friends', 'Amigos en la U', 'Amigos en la U', 'Gestion de amigos y futuros horarios universitarios.', 'Fase 4'),
-                ],
-            ],
-            [
-                'label' => 'Descuentos',
-                'items' => [
-                    self::item('discounts-for-me', 'Para mi', 'Descuentos', 'Funcionalidad pendiente de la Fase 7.', 'Fase 7'),
-                    self::item('discounts-today', 'Hoy', 'Descuentos', 'Funcionalidad pendiente de la Fase 7.', 'Fase 7'),
-                    self::item('discounts-all', 'Todos', 'Descuentos', 'Funcionalidad pendiente de la Fase 7.', 'Fase 7'),
-                    self::item('discounts-benefits', 'Mis beneficios', 'Descuentos', 'Funcionalidad pendiente de la Fase 7.', 'Fase 7'),
-                    self::item('discounts-favorites', 'Favoritos', 'Descuentos', 'Funcionalidad pendiente de la Fase 7.', 'Fase 7'),
-                    self::item('discounts-sources', 'Fuentes', 'Descuentos', 'Funcionalidad pendiente de la Fase 8.', 'Fase 8'),
-                ],
-            ],
-            [
-                'label' => 'Video',
-                'items' => [
-                    self::item('video-editor', 'Editor', 'Video', 'Funcionalidad pendiente de la Fase 6.', 'Fase 6'),
-                    self::item('video-processing', 'Procesamientos', 'Video', 'Funcionalidad pendiente de la Fase 6.', 'Fase 6'),
+                    self::item('friends', 'Horarios', 'Horarios', 'Gestion de amigos y horarios universitarios.', 'Fase 4'),
+                    self::item('discounts', 'Descuentos', 'Descuentos', 'Beneficios personales para encontrar promociones compatibles.', 'Fase 7'),
+                    self::item('expenses', 'Gastos', 'Gastos', 'Configuracion de gastos habituales.', 'Fase 10'),
+                    self::item('video', 'Video', 'Video', 'Editor e historial de procesamientos.', 'Fase 6'),
                 ],
             ],
             [
@@ -48,7 +33,7 @@ final class Navigation
         $section = $section === null || $section === '' ? 'home' : $section;
 
         if ($section === 'notifications') {
-            return self::item('notifications', 'Notificaciones', 'Notificaciones', 'Centro de notificaciones internas.', 'Fase 3');
+            return self::item('notifications', 'Notificaciones', 'Notificaciones', 'Centro general de actividad.', 'Fase 3');
         }
 
         foreach (self::items() as $item) {
@@ -91,6 +76,22 @@ final class Navigation
             'title' => $title,
             'description' => $description,
             'phase' => $phase,
+            'icon' => self::iconFor($key),
         ];
+    }
+
+    private static function iconFor(string $key): string
+    {
+        return match ($key) {
+            'home' => 'home',
+            'organization' => 'check-square',
+            'friends' => 'users',
+            'discounts' => 'percent',
+            'expenses' => 'wallet',
+            'video' => 'play',
+            'settings' => 'settings',
+            'notifications' => 'bell',
+            default => 'circle',
+        };
     }
 }

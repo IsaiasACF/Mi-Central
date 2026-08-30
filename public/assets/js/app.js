@@ -69,6 +69,1211 @@
 (function () {
     'use strict';
 
+    var page = document.querySelector('[data-expenses-page]');
+
+    if (!page || page.dataset.expensesInitialized === 'true') {
+        return;
+    }
+
+    page.dataset.expensesInitialized = 'true';
+
+    var apiUrl = page.getAttribute('data-api-url') || '/api/expenses/configuration.php';
+    var importApiUrl = page.getAttribute('data-import-api-url') || '/api/expenses/import.php';
+    var csrfToken = page.getAttribute('data-csrf-token') || '';
+    var pageMessage = page.querySelector('[data-expense-message]');
+    var pending = false;
+
+    function setMessage(element, text, isError) {
+        if (!(element instanceof HTMLElement)) {
+            return;
+        }
+
+        element.textContent = text;
+        element.hidden = text === '';
+        element.classList.toggle('task-message--error', Boolean(isError));
+        element.classList.toggle('task-message--success', text !== '' && !isError);
+    }
+
+    function flash(text, isError) {
+        setMessage(pageMessage, text, isError);
+    }
+
+    var storedFlash = window.sessionStorage ? window.sessionStorage.getItem('mi-central-expenses-flash') : null;
+
+    if (storedFlash) {
+        try {
+            var parsed = JSON.parse(storedFlash);
+            flash(String(parsed.text || ''), Boolean(parsed.error));
+        } catch (error) {
+            flash('', false);
+        }
+
+        window.sessionStorage.removeItem('mi-central-expenses-flash');
+    }
+
+    function storeFlash(text, isError) {
+        if (!window.sessionStorage) {
+            return;
+        }
+
+        window.sessionStorage.setItem('mi-central-expenses-flash', JSON.stringify({
+            text: text,
+            error: Boolean(isError)
+        }));
+    }
+
+    function post(payload) {
+        return fetch(apiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify(payload)
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la solicitud.');
+                }
+
+                return body.data || {};
+            });
+        });
+    }
+
+    function importPost(payload) {
+        return fetch(importApiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify(payload)
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo importar el JSON.');
+                }
+
+                return body.data || {};
+            });
+        });
+    }
+
+    function modalFor(type) {
+        return page.querySelector('[data-expense-modal="' + type + '"]');
+    }
+
+    function formFor(type) {
+        var modal = modalFor(type);
+
+        return modal ? modal.querySelector('[data-expense-form="' + type + '"]') : null;
+    }
+
+    function modalMessage(modal) {
+        return modal ? modal.querySelector('[data-expense-modal-message]') : null;
+    }
+
+    function setPending(form, nextPending) {
+        pending = nextPending;
+
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+
+        form.setAttribute('aria-busy', nextPending ? 'true' : 'false');
+        Array.prototype.slice.call(form.querySelectorAll('button, input, select, textarea')).forEach(function (control) {
+            control.disabled = nextPending;
+        });
+    }
+
+    function selectedCsv(card, name) {
+        var value = card.getAttribute(name) || '';
+
+        return value === '' ? [] : value.split(',').filter(Boolean);
+    }
+
+    function formatClp(value) {
+        var digits = String(value || '').replace(/\D/g, '');
+
+        if (digits === '') {
+            return '';
+        }
+
+        return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    }
+
+    function activeMethodIds(form) {
+        return Array.prototype.slice.call(form.querySelectorAll('[data-expense-method-checkbox]:checked')).map(function (checkbox) {
+            return checkbox.value;
+        });
+    }
+
+    function updateDefaultOptions(form) {
+        var select = form.querySelector('[data-expense-default-method]');
+
+        if (!(select instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        var selected = {};
+
+        activeMethodIds(form).forEach(function (id) {
+            selected[id] = true;
+        });
+
+        Array.prototype.slice.call(select.options).forEach(function (option, index) {
+            if (index === 0) {
+                option.disabled = false;
+                option.hidden = false;
+                return;
+            }
+
+            var allowed = Boolean(selected[option.value]);
+
+            option.disabled = !allowed;
+            option.hidden = !allowed;
+        });
+
+        if (select.value && !selected[select.value]) {
+            select.value = '';
+        }
+    }
+
+    function updateRecurringAdjustmentFields(form) {
+        var action = form.elements.adjustment_action ? form.elements.adjustment_action.value : 'generate';
+        var skipping = action === 'skip';
+        var amountToggle = form.elements.amount_override;
+        var amountField = form.querySelector('[data-recurring-adjustment-amount-field]');
+        var overrideAmount = !skipping && amountToggle instanceof HTMLInputElement && amountToggle.checked;
+
+        form.querySelectorAll('[data-recurring-adjustment-field]').forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = skipping;
+            }
+        });
+
+        if (amountField instanceof HTMLElement) {
+            amountField.hidden = !overrideAmount;
+        }
+
+        if (skipping && amountToggle instanceof HTMLInputElement) {
+            amountToggle.checked = false;
+        }
+    }
+
+    function configureInactiveCategoryOptions(form, currentCategoryId) {
+        var select = form.querySelector('[data-expense-service-category]');
+
+        if (!(select instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        Array.prototype.slice.call(select.options).forEach(function (option, index) {
+            if (index === 0) {
+                option.hidden = false;
+                return;
+            }
+
+            var active = option.getAttribute('data-active') === '1';
+            option.hidden = !active && option.value !== currentCategoryId;
+        });
+    }
+
+    function configureInactivePaymentOptions(form, selectedIds) {
+        var selected = {};
+
+        selectedIds.forEach(function (id) {
+            selected[id] = true;
+        });
+
+        form.querySelectorAll('[data-expense-method-option]').forEach(function (option) {
+            var checkbox = option.querySelector('[data-expense-method-checkbox]');
+
+            if (!(checkbox instanceof HTMLInputElement)) {
+                return;
+            }
+
+            var active = option.getAttribute('data-active') === '1';
+            var checked = Boolean(selected[checkbox.value]);
+
+            option.hidden = !active && !checked;
+            checkbox.checked = checked;
+        });
+
+        updateDefaultOptions(form);
+    }
+
+    function openModal(type, card) {
+        var modal = modalFor(type);
+        var form = formFor(type);
+        var title = modal ? modal.querySelector('[data-expense-modal-title]') : null;
+
+        if (!(modal instanceof HTMLElement) || !(form instanceof HTMLFormElement)) {
+            return;
+        }
+
+        form.reset();
+        setMessage(modalMessage(modal), '', false);
+
+        if (form.elements.id) {
+            form.elements.id.value = '';
+        }
+
+        if (title) {
+            title.textContent = card
+                ? (type === 'category' ? 'Editar categoria' : (type === 'payment-method' ? 'Editar medio de pago' : (type === 'recurring-rule' ? 'Editar recurrencia' : (type === 'recurring-adjustment' ? 'Editar ajuste mensual' : 'Editar servicio'))))
+                : (type === 'category' ? 'Crear categoria' : (type === 'payment-method' ? 'Agregar medio de pago' : (type === 'recurring-rule' ? 'Configurar recurrencia' : (type === 'recurring-adjustment' ? 'Ajustar mes' : 'Agregar servicio'))));
+        }
+
+        if (type === 'category') {
+            if (form.elements.color && !card) {
+                form.elements.color.value = '#2DD4BF';
+            }
+
+            if (card) {
+                form.elements.id.value = card.getAttribute('data-id') || '';
+                form.elements.name.value = card.getAttribute('data-name') || '';
+                form.elements.color.value = card.getAttribute('data-color') || '#2DD4BF';
+            }
+        }
+
+        if (type === 'payment-method' && card) {
+            form.elements.id.value = card.getAttribute('data-id') || '';
+            form.elements.name.value = card.getAttribute('data-name') || '';
+            form.elements.type.value = card.getAttribute('data-type') || 'other';
+            form.elements.institution_name.value = card.getAttribute('data-institution-name') || '';
+            form.elements.notes.value = card.getAttribute('data-notes') || '';
+        }
+
+        if (type === 'service') {
+            var categoryId = card ? card.getAttribute('data-category-id') || '' : '';
+            var selectedIds = card ? selectedCsv(card, 'data-payment-method-ids') : [];
+            var defaultId = card ? card.getAttribute('data-default-payment-method-id') || '' : '';
+
+            configureInactiveCategoryOptions(form, categoryId);
+            configureInactivePaymentOptions(form, selectedIds);
+
+            if (card) {
+                form.elements.id.value = card.getAttribute('data-id') || '';
+                form.elements.name.value = card.getAttribute('data-name') || '';
+                form.elements.category_id.value = categoryId;
+                form.elements.default_amount_clp.value = formatClp(card.getAttribute('data-default-amount-clp') || '');
+                form.elements.notes.value = card.getAttribute('data-notes') || '';
+            }
+
+            if (form.elements.default_payment_method_id) {
+                form.elements.default_payment_method_id.value = defaultId;
+                updateDefaultOptions(form);
+            }
+        }
+
+        if (type === 'recurring-rule' && card) {
+            var ruleId = card.getAttribute('data-recurring-rule-id') || '';
+
+            form.elements.id.value = ruleId;
+            form.elements.service_id.value = card.getAttribute('data-id') || '';
+            form.elements.active.checked = ruleId === '' || card.getAttribute('data-recurring-active') !== '0';
+            form.elements.frequency.value = card.getAttribute('data-recurring-frequency') || 'monthly';
+            form.elements.interval_value.value = card.getAttribute('data-recurring-interval-value') || '1';
+            form.elements.day_of_month.value = card.getAttribute('data-recurring-day-of-month') || '';
+            form.elements.default_amount_clp.value = formatClp(card.getAttribute('data-recurring-default-amount-clp') || '');
+            form.elements.default_category_id.value = card.getAttribute('data-recurring-default-category-id') || '';
+            form.elements.default_payment_method_id.value = card.getAttribute('data-recurring-default-payment-method-id') || '';
+            form.elements.starts_on.value = card.getAttribute('data-recurring-starts-on') || page.getAttribute('data-today') || '';
+            form.elements.ends_on.value = card.getAttribute('data-recurring-ends-on') || '';
+        }
+
+        if (type === 'recurring-adjustment' && card) {
+            var serviceCard = card.matches('[data-expense-service-card]') ? card : card.closest('[data-expense-service-card]');
+            var adjustmentCard = card.matches('[data-expense-recurring-adjustment-card]') ? card : null;
+
+            if (!(serviceCard instanceof HTMLElement)) {
+                return;
+            }
+
+            form.elements.id.value = adjustmentCard ? adjustmentCard.getAttribute('data-id') || '' : '';
+            form.elements.service_id.value = serviceCard.getAttribute('data-id') || '';
+            form.elements.recurring_rule_id.value = serviceCard.getAttribute('data-recurring-rule-id') || '';
+            form.elements.period_month.value = adjustmentCard ? adjustmentCard.getAttribute('data-period-month') || '' : '';
+            form.elements.adjustment_action.value = adjustmentCard ? adjustmentCard.getAttribute('data-action') || 'generate' : 'generate';
+            form.elements.description.value = adjustmentCard ? adjustmentCard.getAttribute('data-description') || '' : '';
+            form.elements.amount_override.checked = adjustmentCard ? adjustmentCard.getAttribute('data-amount-override') === '1' : false;
+            form.elements.amount_clp.value = adjustmentCard ? formatClp(adjustmentCard.getAttribute('data-amount-clp') || '') : '';
+            form.elements.due_on.value = adjustmentCard ? adjustmentCard.getAttribute('data-due-on') || '' : '';
+            form.elements.category_id.value = adjustmentCard ? adjustmentCard.getAttribute('data-category-id') || '' : '';
+            form.elements.payment_method_id.value = adjustmentCard ? adjustmentCard.getAttribute('data-payment-method-id') || '' : '';
+            form.elements.notes.value = adjustmentCard ? adjustmentCard.getAttribute('data-notes') || '' : '';
+            form.elements.active.checked = !adjustmentCard || adjustmentCard.getAttribute('data-active') !== '0';
+
+            if (!form.elements.period_month.value) {
+                form.elements.period_month.value = (page.getAttribute('data-month-value') || '').slice(0, 7);
+            }
+
+            updateRecurringAdjustmentFields(form);
+        }
+
+        modal.hidden = false;
+        document.body.classList.add('modal-open');
+
+        var first = form.querySelector('input:not([type="hidden"]), select, textarea, button');
+
+        if (first instanceof HTMLElement) {
+            first.focus();
+        }
+    }
+
+    function closeModal(modal) {
+        if (!(modal instanceof HTMLElement)) {
+            return;
+        }
+
+        modal.hidden = true;
+        document.body.classList.remove('modal-open');
+        setMessage(modalMessage(modal), '', false);
+    }
+
+    function closeModalFromBackdrop(modal, closeCallback) {
+        var startedOnBackdrop = false;
+
+        modal.addEventListener('pointerdown', function (event) {
+            startedOnBackdrop = event.target === modal;
+        });
+
+        modal.addEventListener('click', function (event) {
+            if (startedOnBackdrop && event.target === modal) {
+                closeCallback();
+            }
+
+            startedOnBackdrop = false;
+        });
+    }
+
+    function payloadFor(form, type) {
+        var id = form.elements.id ? form.elements.id.value : '';
+        var payload = {
+            id: id
+        };
+
+        if (type === 'category') {
+            payload.action = id ? 'update-category' : 'create-category';
+            payload.name = form.elements.name ? form.elements.name.value : '';
+            payload.color = form.elements.color ? form.elements.color.value : '';
+        }
+
+        if (type === 'payment-method') {
+            payload.action = id ? 'update-payment-method' : 'create-payment-method';
+            payload.name = form.elements.name ? form.elements.name.value : '';
+            payload.type = form.elements.type ? form.elements.type.value : '';
+            payload.institution_name = form.elements.institution_name ? form.elements.institution_name.value : '';
+            payload.notes = form.elements.notes ? form.elements.notes.value : '';
+        }
+
+        if (type === 'service') {
+            payload.action = id ? 'update-service' : 'create-service';
+            payload.name = form.elements.name ? form.elements.name.value : '';
+            payload.category_id = form.elements.category_id ? form.elements.category_id.value : '';
+            payload.default_amount_clp = form.elements.default_amount_clp ? form.elements.default_amount_clp.value : '';
+            payload.notes = form.elements.notes ? form.elements.notes.value : '';
+            payload.payment_method_ids = activeMethodIds(form);
+            payload.default_payment_method_id = form.elements.default_payment_method_id ? form.elements.default_payment_method_id.value : '';
+        }
+
+        if (type === 'recurring-rule') {
+            payload.action = 'save-recurring-rule';
+            payload.service_id = form.elements.service_id ? form.elements.service_id.value : '';
+            payload.active = form.elements.active && form.elements.active.checked ? '1' : '0';
+            payload.frequency = form.elements.frequency ? form.elements.frequency.value : 'monthly';
+            payload.interval_value = form.elements.interval_value ? form.elements.interval_value.value : '1';
+            payload.day_of_month = form.elements.day_of_month ? form.elements.day_of_month.value : '';
+            payload.default_amount_clp = form.elements.default_amount_clp ? form.elements.default_amount_clp.value : '';
+            payload.default_category_id = form.elements.default_category_id ? form.elements.default_category_id.value : '';
+            payload.default_payment_method_id = form.elements.default_payment_method_id ? form.elements.default_payment_method_id.value : '';
+            payload.starts_on = form.elements.starts_on ? form.elements.starts_on.value : '';
+            payload.ends_on = form.elements.ends_on ? form.elements.ends_on.value : '';
+        }
+
+        if (type === 'recurring-adjustment') {
+            payload.action = 'save-recurring-adjustment';
+            payload.service_id = form.elements.service_id ? form.elements.service_id.value : '';
+            payload.recurring_rule_id = form.elements.recurring_rule_id ? form.elements.recurring_rule_id.value : '';
+            payload.period_month = form.elements.period_month ? form.elements.period_month.value : '';
+            payload.adjustment_action = form.elements.adjustment_action ? form.elements.adjustment_action.value : 'generate';
+            payload.description = form.elements.description ? form.elements.description.value : '';
+            payload.amount_override = form.elements.amount_override && form.elements.amount_override.checked ? '1' : '0';
+            payload.amount_clp = form.elements.amount_clp ? form.elements.amount_clp.value : '';
+            payload.due_on = form.elements.due_on ? form.elements.due_on.value : '';
+            payload.category_id = form.elements.category_id ? form.elements.category_id.value : '';
+            payload.payment_method_id = form.elements.payment_method_id ? form.elements.payment_method_id.value : '';
+            payload.notes = form.elements.notes ? form.elements.notes.value : '';
+            payload.active = form.elements.active && form.elements.active.checked ? '1' : '0';
+        }
+
+        return payload;
+    }
+
+    function submitForm(form, type) {
+        var modal = form.closest('[data-expense-modal]');
+
+        if (pending) {
+            return;
+        }
+
+        setPending(form, true);
+        setMessage(modalMessage(modal), '', false);
+
+        post(payloadFor(form, type)).then(function (data) {
+            storeFlash(String(data.message || 'Configuracion guardada.'), false);
+            window.location.reload();
+        }).catch(function (error) {
+            setMessage(modalMessage(modal), error.message, true);
+        }).finally(function () {
+            setPending(form, false);
+        });
+    }
+
+    page.addEventListener('click', function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        var closeButton = target.closest('[data-expense-close]');
+
+        if (closeButton instanceof HTMLElement) {
+            closeModal(closeButton.closest('[data-expense-modal]'));
+            return;
+        }
+
+        var opener = target.closest('[data-expense-open]');
+
+        if (opener instanceof HTMLElement) {
+            var mode = opener.getAttribute('data-expense-open') || '';
+            var card = opener.closest('[data-expense-category-card], [data-expense-payment-card], [data-expense-service-card]');
+
+            if (mode.indexOf('category') === 0) {
+                openModal('category', mode === 'category-edit' ? card : null);
+                return;
+            }
+
+            if (mode.indexOf('payment-method') === 0) {
+                openModal('payment-method', mode === 'payment-method-edit' ? card : null);
+                return;
+            }
+
+            if (mode.indexOf('service') === 0) {
+                openModal('service', mode === 'service-edit' ? card : null);
+                return;
+            }
+
+            if (mode === 'recurring-rule') {
+                openModal('recurring-rule', card);
+                return;
+            }
+
+            if (mode === 'recurring-adjustment' || mode === 'recurring-adjustment-edit') {
+                openModal('recurring-adjustment', mode === 'recurring-adjustment-edit' ? opener.closest('[data-expense-recurring-adjustment-card]') : card);
+                return;
+            }
+        }
+
+        var actionButton = target.closest('[data-expense-action]');
+
+        if (actionButton instanceof HTMLElement) {
+            var actionCard = actionButton.closest('[data-expense-recurring-adjustment-card], [data-expense-category-card], [data-expense-payment-card], [data-expense-service-card]');
+            var action = actionButton.getAttribute('data-expense-action') || '';
+
+            if (!(actionCard instanceof HTMLElement) || action === '') {
+                return;
+            }
+
+            actionButton.setAttribute('aria-busy', 'true');
+            actionButton.setAttribute('disabled', 'disabled');
+
+            post({
+                action: action,
+                id: actionButton.getAttribute('data-recurring-adjustment-action-id') || actionButton.getAttribute('data-recurring-rule-action-id') || actionCard.getAttribute('data-id') || ''
+            }).then(function (data) {
+                storeFlash(String(data.message || 'Configuracion actualizada.'), false);
+                window.location.reload();
+            }).catch(function (error) {
+                flash(error.message, true);
+                actionButton.removeAttribute('disabled');
+                actionButton.removeAttribute('aria-busy');
+            });
+        }
+    });
+
+    page.querySelectorAll('[data-expense-modal]').forEach(function (modal) {
+        closeModalFromBackdrop(modal, function () {
+            closeModal(modal);
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+
+        page.querySelectorAll('[data-expense-modal]').forEach(function (modal) {
+            if (!modal.hidden) {
+                closeModal(modal);
+            }
+        });
+    });
+
+    page.querySelectorAll('[data-expense-form]').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            submitForm(form, form.getAttribute('data-expense-form') || '');
+        });
+    });
+
+    page.querySelectorAll('[data-expense-form="recurring-adjustment"]').forEach(function (form) {
+        form.addEventListener('change', function (event) {
+            if (
+                event.target === form.elements.adjustment_action
+                || event.target === form.elements.amount_override
+            ) {
+                updateRecurringAdjustmentFields(form);
+            }
+        });
+    });
+
+    page.querySelectorAll('[data-expense-method-checkbox]').forEach(function (checkbox) {
+        checkbox.addEventListener('change', function () {
+            var form = checkbox.closest('form');
+
+            if (form instanceof HTMLFormElement) {
+                updateDefaultOptions(form);
+            }
+        });
+    });
+
+    var serviceFilter = page.querySelector('[data-expense-service-filter]');
+
+    if (serviceFilter instanceof HTMLFormElement) {
+        serviceFilter.addEventListener('input', function () {
+            var search = serviceFilter.elements.search ? serviceFilter.elements.search.value.trim().toLowerCase() : '';
+            var categoryId = serviceFilter.elements.category_id ? serviceFilter.elements.category_id.value : '';
+
+            page.querySelectorAll('[data-expense-service-card]').forEach(function (card) {
+                var name = String(card.getAttribute('data-name') || '').toLowerCase();
+                var cardCategoryId = card.getAttribute('data-category-id') || '';
+                var matchesSearch = search === '' || name.indexOf(search) !== -1;
+                var matchesCategory = categoryId === ''
+                    || (categoryId === 'none' && cardCategoryId === '')
+                    || cardCategoryId === categoryId;
+
+                card.hidden = !matchesSearch || !matchesCategory;
+            });
+        });
+    }
+
+    var paymentFilter = page.querySelector('[data-expense-payment-filter]');
+
+    if (paymentFilter instanceof HTMLFormElement) {
+        paymentFilter.addEventListener('input', function () {
+            var type = paymentFilter.elements.type ? paymentFilter.elements.type.value : '';
+
+            page.querySelectorAll('[data-expense-payment-card]').forEach(function (card) {
+                card.hidden = type !== '' && card.getAttribute('data-type') !== type;
+            });
+        });
+    }
+
+    var importForm = page.querySelector('[data-expense-import-form]');
+
+    if (importForm instanceof HTMLFormElement) {
+        importForm.addEventListener('submit', function (event) {
+            var json = importForm.elements.json ? importForm.elements.json.value.trim() : '';
+            var payload;
+
+            event.preventDefault();
+
+            if (json === '') {
+                flash('Pega un JSON para importar.', true);
+                return;
+            }
+
+            try {
+                payload = JSON.parse(json);
+            } catch (error) {
+                flash('El JSON no es valido.', true);
+                return;
+            }
+
+            setPending(importForm, true);
+            flash('', false);
+
+            importPost(payload).then(function (data) {
+                var summary = data.summary || {};
+                storeFlash(
+                    'Importacion completada: '
+                        + String(summary.expenses_created || 0) + ' gasto(s), '
+                        + String(summary.services_created || 0) + ' servicio(s), '
+                        + String(summary.payment_methods_created || 0) + ' medio(s) y '
+                        + String(summary.categories_created || 0) + ' categoria(s) nuevos.',
+                    false
+                );
+                window.location.reload();
+            }).catch(function (error) {
+                flash(error.message, true);
+            }).finally(function () {
+                setPending(importForm, false);
+            });
+        });
+    }
+
+    var monthlyApiUrl = page.getAttribute('data-monthly-api-url') || '/api/expenses/expenses.php';
+    var monthlyModal = page.querySelector('[data-monthly-expense-modal="expense"]');
+    var monthlyForm = monthlyModal ? monthlyModal.querySelector('[data-monthly-expense-form]') : null;
+    var monthlyMessage = monthlyModal ? monthlyModal.querySelector('[data-monthly-expense-modal-message]') : null;
+    var monthlyTitle = monthlyModal ? monthlyModal.querySelector('[data-monthly-expense-modal-title]') : null;
+    var today = page.getAttribute('data-today') || '';
+    var serviceOptions = [];
+    var paymentOptions = [];
+
+    try {
+        serviceOptions = JSON.parse(page.getAttribute('data-service-options') || '[]');
+        paymentOptions = JSON.parse(page.getAttribute('data-payment-options') || '[]');
+    } catch (error) {
+        serviceOptions = [];
+        paymentOptions = [];
+    }
+
+    function monthlyPost(payload) {
+        return fetch(monthlyApiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify(payload)
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo guardar el gasto.');
+                }
+
+                return body.data || {};
+            });
+        });
+    }
+
+    function monthlyServiceById(id) {
+        for (var index = 0; index < serviceOptions.length; index += 1) {
+            if (String(serviceOptions[index].id) === String(id)) {
+                return serviceOptions[index];
+            }
+        }
+
+        return null;
+    }
+
+    function configureMonthlyInactiveOptions(form, currentValues) {
+        ['service_id', 'category_id'].forEach(function (name) {
+            var select = form.elements[name];
+            var current = currentValues[name] || '';
+
+            if (!(select instanceof HTMLSelectElement)) {
+                return;
+            }
+
+            Array.prototype.slice.call(select.options).forEach(function (option, index) {
+                if (index === 0) {
+                    option.hidden = false;
+                    return;
+                }
+
+                var active = option.getAttribute('data-active') === '1';
+                option.hidden = !active && option.value !== current;
+            });
+        });
+    }
+
+    function rebuildMonthlyPaymentOptions(form, currentPaymentId) {
+        var select = form.elements.payment_method_id;
+
+        if (!(select instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        var selectedService = monthlyServiceById(form.elements.service_id ? form.elements.service_id.value : '');
+        var selected = currentPaymentId || select.value || '';
+        var added = {};
+
+        select.innerHTML = '';
+        select.appendChild(new Option('Sin medio', ''));
+
+        function addOption(id, label) {
+            if (!id || added[id]) {
+                return;
+            }
+
+            select.appendChild(new Option(label, id));
+            added[id] = true;
+        }
+
+        if (selectedService && Array.isArray(selectedService.payment_methods)) {
+            selectedService.payment_methods.forEach(function (method) {
+                addOption(String(method.id || ''), String(method.label || 'Medio de pago'));
+            });
+        }
+
+        paymentOptions.forEach(function (method) {
+            var id = String(method.id || '');
+            var prefix = selectedService && !added[id] ? 'Otro medio: ' : '';
+
+            addOption(id, prefix + String(method.label || 'Medio de pago'));
+        });
+
+        if (selected && !added[selected]) {
+            var existing = page.querySelector('[data-monthly-expense-payment] option[value="' + selected.replace(/"/g, '\\"') + '"]');
+            addOption(selected, existing ? existing.textContent : 'Medio inactivo');
+        }
+
+        select.value = selected;
+
+        if (select.value !== selected) {
+            select.value = '';
+        }
+    }
+
+    function applyServiceSuggestion(form) {
+        var service = monthlyServiceById(form.elements.service_id ? form.elements.service_id.value : '');
+
+        if (!service) {
+            rebuildMonthlyPaymentOptions(form, form.elements.payment_method_id ? form.elements.payment_method_id.value : '');
+            return;
+        }
+
+        if (form.elements.description) {
+            form.elements.description.value = String(service.name || '');
+        }
+
+        if (form.elements.category_id) {
+            form.elements.category_id.value = String(service.category_id || '');
+        }
+
+        if (form.elements.amount_clp && service.default_amount_clp) {
+            form.elements.amount_clp.value = formatClp(service.default_amount_clp);
+        }
+
+        rebuildMonthlyPaymentOptions(form, String(service.default_payment_method_id || ''));
+    }
+
+    function updateMonthlyInstallments(form, keepValues) {
+        var toggle = form.elements.has_installments;
+        var fields = form.querySelector('[data-monthly-installment-fields]');
+        var enabled = toggle instanceof HTMLInputElement && toggle.checked;
+
+        if (fields instanceof HTMLElement) {
+            fields.hidden = !enabled;
+        }
+
+        ['installment_current', 'installment_total'].forEach(function (name) {
+            var input = form.elements[name];
+
+            if (!(input instanceof HTMLInputElement)) {
+                return;
+            }
+
+            if (!enabled && !keepValues) {
+                input.value = '';
+            }
+        });
+    }
+
+    function openMonthlyModal(card) {
+        if (!(monthlyModal instanceof HTMLElement) || !(monthlyForm instanceof HTMLFormElement)) {
+            return;
+        }
+
+        monthlyForm.reset();
+        setMessage(monthlyMessage, '', false);
+
+        if (monthlyTitle) {
+            monthlyTitle.textContent = card ? 'Editar gasto' : 'Nuevo gasto';
+        }
+
+        if (monthlyForm.elements.id) {
+            monthlyForm.elements.id.value = card ? card.getAttribute('data-id') || '' : '';
+        }
+
+        configureMonthlyInactiveOptions(monthlyForm, {
+            service_id: card ? card.getAttribute('data-service-id') || '' : '',
+            category_id: card ? card.getAttribute('data-category-id') || '' : ''
+        });
+
+        if (card) {
+            monthlyForm.elements.service_id.value = card.getAttribute('data-service-id') || '';
+            monthlyForm.elements.description.value = card.getAttribute('data-description') || '';
+            monthlyForm.elements.category_id.value = card.getAttribute('data-category-id') || '';
+            monthlyForm.elements.amount_clp.value = formatClp(card.getAttribute('data-amount-clp') || '');
+            monthlyForm.elements.installment_current.value = card.getAttribute('data-installment-current') || '';
+            monthlyForm.elements.installment_total.value = card.getAttribute('data-installment-total') || '';
+            if (monthlyForm.elements.has_installments instanceof HTMLInputElement) {
+                monthlyForm.elements.has_installments.checked = monthlyForm.elements.installment_current.value !== '' || monthlyForm.elements.installment_total.value !== '';
+            }
+            monthlyForm.elements.due_on.value = card.getAttribute('data-due-on') || '';
+            monthlyForm.elements.status.value = card.getAttribute('data-status') || 'pending';
+            monthlyForm.elements.paid_on.value = card.getAttribute('data-paid-on') || '';
+            monthlyForm.elements.notes.value = card.getAttribute('data-notes') || '';
+            rebuildMonthlyPaymentOptions(monthlyForm, card.getAttribute('data-payment-method-id') || '');
+        } else {
+            rebuildMonthlyPaymentOptions(monthlyForm, '');
+        }
+
+        updateMonthlyInstallments(monthlyForm, true);
+        monthlyModal.hidden = false;
+        document.body.classList.add('modal-open');
+
+        var first = monthlyForm.querySelector('input:not([type="hidden"]), select, textarea, button');
+
+        if (first instanceof HTMLElement) {
+            first.focus();
+        }
+    }
+
+    function closeMonthlyModal() {
+        if (!(monthlyModal instanceof HTMLElement)) {
+            return;
+        }
+
+        monthlyModal.hidden = true;
+        document.body.classList.remove('modal-open');
+        setMessage(monthlyMessage, '', false);
+    }
+
+    function monthlyPayload(form) {
+        var id = form.elements.id ? form.elements.id.value : '';
+
+        return {
+            action: id ? 'update' : 'create',
+            id: id,
+            period_month: form.elements.period_month ? form.elements.period_month.value : '',
+            service_id: form.elements.service_id ? form.elements.service_id.value : '',
+            description: form.elements.description ? form.elements.description.value : '',
+            category_id: form.elements.category_id ? form.elements.category_id.value : '',
+            amount_clp: form.elements.amount_clp ? form.elements.amount_clp.value : '',
+            installment_current: form.elements.has_installments && form.elements.has_installments.checked && form.elements.installment_current ? form.elements.installment_current.value : '',
+            installment_total: form.elements.has_installments && form.elements.has_installments.checked && form.elements.installment_total ? form.elements.installment_total.value : '',
+            due_on: form.elements.due_on ? form.elements.due_on.value : '',
+            status: form.elements.status ? form.elements.status.value : 'pending',
+            paid_on: form.elements.paid_on ? form.elements.paid_on.value : '',
+            payment_method_id: form.elements.payment_method_id ? form.elements.payment_method_id.value : '',
+            notes: form.elements.notes ? form.elements.notes.value : ''
+        };
+    }
+
+    page.addEventListener('click', function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        if (target.closest('[data-monthly-expense-close]')) {
+            closeMonthlyModal();
+            return;
+        }
+
+        var opener = target.closest('[data-monthly-expense-open]');
+
+        if (opener instanceof HTMLElement) {
+            var card = opener.closest('[data-monthly-expense-card]');
+            openMonthlyModal(opener.getAttribute('data-monthly-expense-open') === 'expense-edit' ? card : null);
+            return;
+        }
+
+        var actionButton = target.closest('[data-monthly-expense-action]');
+
+        if (actionButton instanceof HTMLElement) {
+            var actionCard = actionButton.closest('[data-monthly-expense-card]');
+            var action = actionButton.getAttribute('data-monthly-expense-action') || '';
+
+            if (!(actionCard instanceof HTMLElement) || action === '') {
+                return;
+            }
+
+            actionButton.setAttribute('disabled', 'disabled');
+            actionButton.setAttribute('aria-busy', 'true');
+
+            monthlyPost({
+                action: action,
+                id: actionCard.getAttribute('data-id') || '',
+                paid_on: action === 'mark-paid' ? today : ''
+            }).then(function (data) {
+                storeFlash(String(data.message || 'Gasto actualizado.'), false);
+                window.location.reload();
+            }).catch(function (error) {
+                flash(error.message, true);
+                actionButton.removeAttribute('disabled');
+                actionButton.removeAttribute('aria-busy');
+            });
+        }
+    });
+
+    if (monthlyModal instanceof HTMLElement) {
+        closeModalFromBackdrop(monthlyModal, function () {
+            closeMonthlyModal();
+        });
+    }
+
+    if (monthlyForm instanceof HTMLFormElement) {
+        monthlyForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            setPending(monthlyForm, true);
+            setMessage(monthlyMessage, '', false);
+
+            monthlyPost(monthlyPayload(monthlyForm)).then(function (data) {
+                storeFlash(String(data.message || 'Gasto guardado.'), false);
+                window.location.reload();
+            }).catch(function (error) {
+                setMessage(monthlyMessage, error.message, true);
+            }).finally(function () {
+                setPending(monthlyForm, false);
+            });
+        });
+
+        monthlyForm.addEventListener('change', function (event) {
+            if (event.target === monthlyForm.elements.service_id) {
+                applyServiceSuggestion(monthlyForm);
+            }
+
+            if (event.target === monthlyForm.elements.has_installments) {
+                updateMonthlyInstallments(monthlyForm, false);
+            }
+
+            if (event.target === monthlyForm.elements.status && monthlyForm.elements.status.value === 'paid' && monthlyForm.elements.paid_on.value === '') {
+                monthlyForm.elements.paid_on.value = today;
+            }
+
+            if (event.target === monthlyForm.elements.status && monthlyForm.elements.status.value !== 'paid') {
+                monthlyForm.elements.paid_on.value = '';
+            }
+        });
+    }
+}());
+
+(function () {
+    'use strict';
+
+    var panel = document.querySelector('[data-settings-benefits]');
+
+    if (!panel || panel.dataset.settingsBenefitsInitialized === 'true') {
+        return;
+    }
+
+    panel.dataset.settingsBenefitsInitialized = 'true';
+
+    var apiUrl = panel.getAttribute('data-api-url') || '/api/discounts/user-benefits.php';
+    var csrfToken = panel.getAttribute('data-csrf-token') || '';
+    var message = panel.querySelector('[data-settings-benefits-message]');
+
+    function setMessage(text, isError) {
+        if (!(message instanceof HTMLElement)) {
+            return;
+        }
+
+        message.textContent = text;
+        message.hidden = text === '';
+        message.classList.toggle('task-message--error', Boolean(isError));
+        message.classList.toggle('task-message--success', text !== '' && !isError);
+    }
+
+    function requestToggle(programId, enabled) {
+        return fetch(apiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify({
+                action: 'toggle-program',
+                benefit_program_id: programId,
+                enabled: enabled
+            })
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo actualizar ese beneficio.');
+                }
+
+                return body.data;
+            });
+        });
+    }
+
+    panel.addEventListener('change', function (event) {
+        var checkbox = event.target;
+
+        if (!(checkbox instanceof HTMLInputElement) || !checkbox.matches('[data-benefit-toggle]')) {
+            return;
+        }
+
+        var programId = checkbox.getAttribute('data-benefit-program-id') || '';
+        var next = checkbox.checked;
+        var previous = !next;
+
+        if (!programId) {
+            checkbox.checked = previous;
+            return;
+        }
+
+        checkbox.disabled = true;
+        setMessage('', false);
+
+        requestToggle(programId, next).then(function (data) {
+            checkbox.checked = Boolean(data.enabled);
+            setMessage(Boolean(data.enabled) ? 'Beneficio agregado a tu perfil.' : 'Beneficio quitado de tu perfil.', false);
+        }).catch(function (error) {
+            checkbox.checked = previous;
+            setMessage(error.message, true);
+        }).finally(function () {
+            checkbox.disabled = false;
+        });
+    });
+}());
+
+(function () {
+    'use strict';
+
+    var page = document.querySelector('[data-discounts-discovery-page]');
+
+    if (!page || page.dataset.discountsDiscoveryInitialized === 'true') {
+        return;
+    }
+
+    page.dataset.discountsDiscoveryInitialized = 'true';
+
+    var apiUrl = page.getAttribute('data-api-url') || '/api/discounts/favorites.php';
+    var csrfToken = page.getAttribute('data-csrf-token') || '';
+    var message = page.querySelector('[data-discount-favorite-message]');
+
+    function setMessage(text, isError) {
+        if (!message) {
+            return;
+        }
+
+        message.textContent = text;
+        message.hidden = text === '';
+        message.classList.toggle('task-message--error', Boolean(isError));
+        message.classList.toggle('task-message--success', text !== '' && !isError);
+    }
+
+    function setFavoriteState(button, favorite) {
+        var icon = button.querySelector('[data-discount-favorite-icon]');
+        var text = button.querySelector('[data-discount-favorite-text]');
+        var label = favorite ? 'Quitar de favoritos' : 'Agregar a favoritos';
+
+        button.classList.toggle('is-favorite', favorite);
+        button.setAttribute('data-favorite', favorite ? '1' : '0');
+        button.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+
+        if (icon) {
+            icon.textContent = favorite ? '♥' : '♡';
+        }
+
+        if (text) {
+            text.textContent = label;
+        }
+    }
+
+    function requestFavorite(promotionId, favorite) {
+        return fetch(apiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify({
+                promotion_id: promotionId,
+                favorite: favorite
+            })
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo actualizar el favorito.');
+                }
+
+                return body.data;
+            });
+        });
+    }
+
+    page.addEventListener('click', function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        var conditionsButton = target.closest('[data-discount-conditions-toggle]');
+
+        if (conditionsButton instanceof HTMLElement) {
+            var panelId = conditionsButton.getAttribute('data-target') || '';
+            var panel = panelId ? document.getElementById(panelId) : null;
+
+            if (panel instanceof HTMLElement) {
+                var expanded = conditionsButton.getAttribute('aria-expanded') === 'true';
+
+                conditionsButton.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+                panel.hidden = expanded;
+                conditionsButton.textContent = expanded ? 'Ver condiciones' : 'Ocultar condiciones';
+            }
+
+            return;
+        }
+
+        var favoriteButton = target.closest('[data-discount-favorite]');
+
+        if (!(favoriteButton instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        var promotionId = favoriteButton.getAttribute('data-promotion-id') || '';
+        var previous = favoriteButton.getAttribute('data-favorite') === '1';
+        var next = !previous;
+
+        if (!promotionId) {
+            return;
+        }
+
+        favoriteButton.disabled = true;
+        setMessage('', false);
+        setFavoriteState(favoriteButton, next);
+
+        requestFavorite(promotionId, next).then(function (data) {
+            setFavoriteState(favoriteButton, Boolean(data.favorite));
+            setMessage(Boolean(data.favorite) ? 'Agregado a favoritos.' : 'Quitado de favoritos.', false);
+        }).catch(function (error) {
+            setFavoriteState(favoriteButton, previous);
+            setMessage(error.message, true);
+        }).finally(function () {
+            favoriteButton.disabled = false;
+        });
+    });
+}());
+
+(function () {
+    'use strict';
+
     var editor = document.querySelector('[data-video-editor]');
 
     if (!editor || editor.dataset.videoEditorInitialized === 'true') {
@@ -658,24 +1863,15 @@
 
             if (job.status === 'completed') {
                 var download = document.createElement('a');
-                var transcribe = document.createElement('button');
                 var remove = document.createElement('button');
                 download.className = 'button button--secondary';
                 download.href = '/video/export/download.php?id=' + encodeURIComponent(String(job.id || ''));
                 download.textContent = 'Descargar';
-                transcribe.type = 'button';
-                transcribe.className = 'button button--secondary';
-                transcribe.dataset.videoTranscriptionOpen = '';
-                transcribe.dataset.transcriptionSourceType = 'export';
-                transcribe.dataset.transcriptionSourceId = String(job.id || '');
-                transcribe.dataset.transcriptionSourceName = String(job.output_name || 'Exportacion');
-                transcribe.textContent = 'Transcribir';
                 remove.type = 'button';
                 remove.className = 'button button--danger';
                 remove.dataset.exportAction = 'delete';
                 remove.textContent = 'Eliminar exportacion';
                 actions.appendChild(download);
-                actions.appendChild(transcribe);
                 actions.appendChild(remove);
             } else if (job.status === 'failed') {
                 var retry = document.createElement('button');
@@ -1372,24 +2568,18 @@
     var list = page.querySelector('[data-video-list]');
     var count = page.querySelector('[data-video-count]');
     var apiUrl = page.getAttribute('data-api-url') || '/api/video/files.php';
+    var exportsApiUrl = page.getAttribute('data-video-exports-api-url') || '/api/video/exports.php';
     var csrfToken = page.getAttribute('data-csrf-token') || '';
     var maxUploadMb = Number.parseInt(page.getAttribute('data-max-upload-mb') || '1024', 10) || 1024;
     var uploadPending = false;
     var actionPending = false;
     var detailId = page.getAttribute('data-video-detail-id') || '';
     var pollingTimer = null;
-    var transcriptionsApiUrl = page.getAttribute('data-transcriptions-api-url') || '/api/video/transcriptions.php';
-    var transcriptionConfirm = page.querySelector('[data-video-transcription-confirm]');
-    var transcriptionCancelButton = page.querySelector('[data-video-transcription-cancel]');
-    var transcriptionCreateButton = page.querySelector('[data-video-transcription-create]');
-    var transcriptionLanguage = page.querySelector('[data-video-transcription-language]');
-    var transcriptionList = page.querySelector('[data-video-transcription-list]');
-    var transcriptionCount = page.querySelector('[data-video-transcription-count]');
-    var transcriptionModel = page.getAttribute('data-transcription-model') || '';
-    var transcriptionPollingTimer = null;
-    var transcriptionActionPending = false;
-    var pendingTranscriptionSource = null;
-    var latestTranscriptions = [];
+    var processedPanel = page.querySelector('[data-video-processed-panel]');
+    var processedList = page.querySelector('[data-video-processed-list]');
+    var processedCount = page.querySelector('[data-video-processed-count]');
+    var processedPollingTimer = null;
+    var processedActionPending = false;
 
     function showMessage(text, isError) {
         if (!message) {
@@ -1632,7 +2822,7 @@
         article.className = 'video-item';
         article.dataset.videoId = String(video.id || '');
         main.className = 'video-item__main';
-        titleLink.href = '/index.php?section=video-editor&id=' + encodeURIComponent(String(video.id || ''));
+        titleLink.href = '/index.php?section=video&id=' + encodeURIComponent(String(video.id || ''));
         titleLink.textContent = String(video.original_name || '');
         title.appendChild(titleLink);
         meta.className = 'task-meta';
@@ -1657,7 +2847,7 @@
         }
 
         openLink.className = 'button button--secondary';
-        openLink.href = '/index.php?section=video-editor&id=' + encodeURIComponent(String(video.id || ''));
+        openLink.href = '/index.php?section=video&id=' + encodeURIComponent(String(video.id || ''));
         openLink.textContent = 'Abrir';
         deleteButton.type = 'button';
         deleteButton.className = 'button button--danger';
@@ -1727,8 +2917,8 @@
         return jsonApi(videoUrl(videoId).toString(), {method: 'GET'});
     }
 
-    function transcriptionUrl(query) {
-        var url = new URL(transcriptionsApiUrl, window.location.origin);
+    function exportUrl(query) {
+        var url = new URL(exportsApiUrl, window.location.origin);
 
         Object.keys(query || {}).forEach(function (key) {
             url.searchParams.set(key, query[key]);
@@ -1737,17 +2927,8 @@
         return url;
     }
 
-    function transcriptionDownloadUrl(transcriptionId, format) {
-        var url = new URL('/video/transcription/download.php', window.location.origin);
-
-        url.searchParams.set('id', transcriptionId);
-        url.searchParams.set('format', format);
-
-        return url.toString();
-    }
-
-    function transcriptionApi(action, payload, query) {
-        var url = transcriptionUrl(query || {});
+    function exportApi(action, payload, query) {
+        var url = exportUrl(query || {});
         var options = {
             method: action === 'list' ? 'GET' : 'POST',
             headers: {
@@ -1765,7 +2946,7 @@
         return jsonApi(url.toString(), options);
     }
 
-    function transcriptionStatusLabel(status) {
+    function exportStatusLabel(status) {
         if (status === 'pending') {
             return 'En cola';
         }
@@ -1775,201 +2956,235 @@
         }
 
         if (status === 'completed') {
-            return 'Completada';
+            return 'Completado';
+        }
+
+        if (status === 'expired') {
+            return 'Expirado';
         }
 
         if (status === 'failed') {
-            return 'Fallida';
+            return 'Fallido';
         }
 
-        return 'Pendiente';
+        return 'En cola';
     }
 
-    function transcriptionLanguageLabel(language) {
-        if (language === 'es') {
-            return 'Espanol';
+    function dateTimeLabel(value) {
+        var raw = String(value || '');
+
+        if (!raw) {
+            return '';
         }
 
-        if (language === 'en') {
-            return 'Ingles';
+        var date = new Date(raw.replace(' ', 'T') + 'Z');
+
+        if (Number.isNaN(date.getTime())) {
+            return raw.slice(0, 16);
         }
 
-        return 'Detectar automaticamente';
+        return new Intl.DateTimeFormat('es-CL', {
+            timeZone: 'America/Santiago',
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        }).format(date).replace(',', ' ·');
     }
 
-    function transcriptionSourceId(item) {
-        if (String(item.source_type || 'video') === 'export') {
-            return item.export_job_id === null || item.export_job_id === undefined ? '' : String(item.export_job_id);
-        }
+    function processedEmptyState() {
+        var wrapper = document.createElement('div');
+        var title = document.createElement('p');
+        var text = document.createElement('p');
+        var link = document.createElement('a');
 
-        return String(item.video_id || '');
+        wrapper.className = 'video-processed-empty';
+        title.textContent = 'Aun no has procesado videos.';
+        text.textContent = 'Edita un video y exportalo para verlo aqui.';
+        link.className = 'button button--primary';
+        link.href = '/index.php?section=video';
+        link.textContent = 'Ir al editor';
+        wrapper.appendChild(title);
+        wrapper.appendChild(text);
+        wrapper.appendChild(link);
+
+        return wrapper;
     }
 
-    function sameTranscriptionSource(item, source) {
-        if (!source) {
-            return false;
-        }
-
-        return String(item.source_type || 'video') === source.type && transcriptionSourceId(item) === source.id;
-    }
-
-    function segmentCountLabel(count) {
-        var amount = Math.max(0, Number(count || 0));
-
-        return new Intl.NumberFormat('es-CL').format(amount) + (amount === 1 ? ' segmento' : ' segmentos');
-    }
-
-    function renderTranscriptions(items, model) {
-        if (!(transcriptionList instanceof HTMLElement)) {
+    function appendProcessedMeta(container, text, className) {
+        if (!text) {
             return;
         }
 
-        latestTranscriptions = Array.isArray(items) ? items : [];
-        transcriptionList.replaceChildren();
+        var span = document.createElement('span');
 
-        if (transcriptionCount) {
-            transcriptionCount.textContent = String(latestTranscriptions.length);
+        if (className) {
+            span.className = className;
         }
 
-        if (transcriptionOpenButton) {
-            transcriptionOpenButton.textContent = latestTranscriptions.length === 0 ? 'Transcribir' : 'Volver a transcribir';
+        span.textContent = text;
+        container.appendChild(span);
+    }
+
+    function processedExportArticle(job) {
+        var item = document.createElement('article');
+        var main = document.createElement('div');
+        var title = document.createElement('strong');
+        var original = document.createElement('span');
+        var meta = document.createElement('div');
+        var actions = document.createElement('div');
+        var jobStatus = String(job.status || 'pending');
+        var displayStatus = String(job.display_status || jobStatus);
+        var percent = Math.max(0, Math.min(100, Number(job.progress_percent || (jobStatus === 'completed' ? 100 : 0))));
+        var downloadable = Boolean(job.is_downloadable);
+
+        item.className = 'video-export-item video-processed-item';
+        item.dataset.exportJobId = String(job.id || '');
+        main.className = 'video-processed-item__main';
+        title.textContent = String(job.output_name || 'Exportacion');
+        main.appendChild(title);
+
+        if (job.video_original_name) {
+            original.textContent = 'Original: ' + String(job.video_original_name);
+            main.appendChild(original);
         }
 
-        if (model) {
-            transcriptionModel = String(model);
-            var modelTarget = page.querySelector('[data-video-transcription-model]');
+        meta.className = 'video-processed-meta';
+        appendProcessedMeta(meta, exportStatusLabel(displayStatus), 'video-export-status video-export-status--' + displayStatus);
+        appendProcessedMeta(meta, dateTimeLabel(job.created_at));
 
-            if (modelTarget) {
-                modelTarget.textContent = transcriptionModel;
-            }
+        if (job.output_duration_seconds !== null && job.output_duration_seconds !== undefined) {
+            appendProcessedMeta(meta, durationLabel(job.output_duration_seconds));
         }
 
-        if (latestTranscriptions.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'video-cut-list__empty';
-            empty.textContent = 'Aun no has creado transcripciones.';
-            transcriptionList.appendChild(empty);
-            stopTranscriptionPolling();
-            return;
+        if (job.output_size_bytes !== null && job.output_size_bytes !== undefined) {
+            appendProcessedMeta(meta, sizeLabel(job.output_size_bytes));
         }
 
-        latestTranscriptions.forEach(function (transcription) {
-            var item = document.createElement('article');
-            var main = document.createElement('div');
-            var title = document.createElement('strong');
-            var status = document.createElement('span');
+        main.appendChild(meta);
+
+        if (displayStatus === 'processing' || displayStatus === 'pending') {
             var progress = document.createElement('div');
             var progressFill = document.createElement('span');
             var details = document.createElement('small');
-            var extra = document.createElement('small');
-            var actions = document.createElement('div');
-            var transcriptionStatus = String(transcription.status || 'pending');
-            var percent = Math.max(0, Math.min(100, Number(transcription.progress_percent || (transcriptionStatus === 'completed' ? 100 : 0))));
-
-            item.className = 'video-export-item';
-            item.dataset.transcriptionId = String(transcription.id || '');
-            title.textContent = String(transcription.source_display_name || '') || transcriptionLanguageLabel(String(transcription.requested_language || 'auto'));
-            status.textContent = transcriptionStatusLabel(transcriptionStatus) + ' · ' + transcriptionLanguageLabel(String(transcription.requested_language || 'auto'));
             progress.className = 'video-export-progress';
             progress.setAttribute('aria-label', 'Progreso ' + String(Math.round(percent)) + '%');
             progressFill.style.width = String(percent) + '%';
             progress.appendChild(progressFill);
-            details.textContent = transcriptionStatus === 'processing'
-                ? 'Procesando...' + (percent > 1 && percent < 100 ? ' ' + String(Math.round(percent)) + '%' : '')
-                : String(Math.round(percent)) + '%';
-
-            if (transcriptionStatus === 'completed') {
-                details.textContent += ' · ' + segmentCountLabel(transcription.segments_count);
-                extra.textContent = 'Transcripcion completada correctamente.';
-            } else if (transcriptionStatus === 'failed') {
-                extra.textContent = 'No se pudo completar la transcripcion.';
-            }
-
-            actions.className = 'task-actions';
-
-            if (transcriptionStatus === 'completed') {
-                var txt = document.createElement('a');
-                var timedTxt = document.createElement('a');
-                var srt = document.createElement('a');
-                var vtt = document.createElement('a');
-                var copy = document.createElement('button');
-                var remove = document.createElement('button');
-                txt.className = 'button button--secondary';
-                txt.href = transcriptionDownloadUrl(String(transcription.id || ''), 'txt');
-                txt.textContent = 'Descargar TXT';
-                timedTxt.className = 'button button--secondary';
-                timedTxt.href = transcriptionDownloadUrl(String(transcription.id || ''), 'txt_timestamps');
-                timedTxt.textContent = 'TXT con tiempos';
-                srt.className = 'button button--secondary';
-                srt.href = transcriptionDownloadUrl(String(transcription.id || ''), 'srt');
-                srt.textContent = 'Descargar SRT';
-                vtt.className = 'button button--secondary';
-                vtt.href = transcriptionDownloadUrl(String(transcription.id || ''), 'vtt');
-                vtt.textContent = 'Descargar VTT';
-                copy.type = 'button';
-                copy.className = 'button button--secondary';
-                copy.dataset.transcriptionAction = 'copy';
-                copy.textContent = 'Copiar texto';
-                remove.type = 'button';
-                remove.className = 'button button--danger';
-                remove.dataset.transcriptionAction = 'delete';
-                remove.textContent = 'Eliminar transcripcion';
-                actions.appendChild(txt);
-                actions.appendChild(timedTxt);
-                actions.appendChild(srt);
-                actions.appendChild(vtt);
-                actions.appendChild(copy);
-                actions.appendChild(remove);
-            } else if (transcriptionStatus === 'failed') {
-                var retry = document.createElement('button');
-                var deleteFailed = document.createElement('button');
-                retry.type = 'button';
-                retry.className = 'button button--secondary';
-                retry.dataset.transcriptionAction = 'retry';
-                retry.dataset.language = String(transcription.requested_language || 'auto');
-                retry.dataset.sourceType = String(transcription.source_type || 'video');
-                retry.dataset.sourceId = transcriptionSourceId(transcription);
-                retry.dataset.sourceName = String(transcription.source_display_name || '');
-                retry.textContent = 'Reintentar';
-                deleteFailed.type = 'button';
-                deleteFailed.className = 'button button--danger';
-                deleteFailed.dataset.transcriptionAction = 'delete';
-                deleteFailed.textContent = 'Eliminar transcripcion';
-                actions.appendChild(retry);
-                actions.appendChild(deleteFailed);
-            }
-
-            main.appendChild(title);
-            main.appendChild(status);
+            details.textContent = displayStatus === 'processing' ? 'Procesando... ' + String(Math.round(percent)) + '%' : 'En cola';
             main.appendChild(progress);
             main.appendChild(details);
+        } else if (displayStatus === 'failed') {
+            var failed = document.createElement('small');
+            failed.textContent = 'No se pudo completar la exportacion.';
+            main.appendChild(failed);
+        } else if (displayStatus === 'expired') {
+            var expired = document.createElement('small');
+            expired.textContent = 'El archivo exportado ya expiro.';
+            main.appendChild(expired);
+        }
 
-            if (extra.textContent !== '') {
-                main.appendChild(extra);
-            }
+        actions.className = 'task-actions';
 
-            item.appendChild(main);
-            item.appendChild(actions);
-            transcriptionList.appendChild(item);
+        if (jobStatus === 'completed' && downloadable) {
+            var play = document.createElement('button');
+            var download = document.createElement('a');
+            play.type = 'button';
+            play.className = 'button button--secondary';
+            play.dataset.exportAction = 'play';
+            play.textContent = 'Reproducir';
+            download.className = 'button button--secondary';
+            download.href = '/video/export/download.php?id=' + encodeURIComponent(String(job.id || ''));
+            download.textContent = 'Descargar';
+            actions.appendChild(play);
+            actions.appendChild(download);
+        }
+
+        if (jobStatus !== 'processing') {
+            var remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'button button--danger';
+            remove.dataset.exportAction = 'delete';
+            remove.textContent = 'Eliminar';
+            actions.appendChild(remove);
+        }
+
+        item.appendChild(main);
+        item.appendChild(actions);
+
+        if (jobStatus === 'completed' && downloadable) {
+            var player = document.createElement('video');
+            player.className = 'video-player video-player--inline';
+            player.controls = true;
+            player.preload = 'metadata';
+            player.src = '/video/export/stream.php?id=' + encodeURIComponent(String(job.id || ''));
+            player.dataset.exportPlayer = '';
+            player.hidden = true;
+            item.appendChild(player);
+        }
+
+        return item;
+    }
+
+    function renderProcessedExports(jobs) {
+        if (!(processedList instanceof HTMLElement)) {
+            return;
+        }
+
+        processedList.replaceChildren();
+
+        if (processedCount) {
+            processedCount.textContent = String(jobs.length);
+        }
+
+        if (jobs.length === 0) {
+            processedList.appendChild(processedEmptyState());
+            stopProcessedPolling();
+            return;
+        }
+
+        jobs.forEach(function (job) {
+            processedList.appendChild(processedExportArticle(job));
         });
 
-        if (latestTranscriptions.some(function (item) { return item.status === 'pending' || item.status === 'processing'; })) {
-            startTranscriptionPolling();
+        if (jobs.some(function (job) { return job.status === 'pending' || job.status === 'processing'; })) {
+            startProcessedPolling();
         } else {
-            stopTranscriptionPolling();
+            stopProcessedPolling();
         }
     }
 
-    function loadTranscriptions() {
-        if (!detailId || !(transcriptionList instanceof HTMLElement)) {
+    function loadProcessedExports() {
+        if (!(processedList instanceof HTMLElement)) {
             return Promise.resolve(null);
         }
 
-        return transcriptionApi('list', null, {video_id: detailId}).then(function (data) {
-            var items = Array.isArray(data && data.items) ? data.items : [];
-            renderTranscriptions(items, data && data.model ? data.model : transcriptionModel);
-            return data;
+        return exportApi('list', null, {}).then(function (jobs) {
+            renderProcessedExports(Array.isArray(jobs) ? jobs : []);
+            return jobs;
         });
+    }
+
+    function stopProcessedPolling() {
+        if (processedPollingTimer !== null) {
+            window.clearTimeout(processedPollingTimer);
+            processedPollingTimer = null;
+        }
+    }
+
+    function startProcessedPolling() {
+        if (!(processedList instanceof HTMLElement) || processedPollingTimer !== null) {
+            return;
+        }
+
+        processedPollingTimer = window.setTimeout(function pollProcessedExports() {
+            processedPollingTimer = null;
+            loadProcessedExports().catch(function () {
+                startProcessedPolling();
+            });
+        }, 3000);
     }
 
     function stopMetadataPolling() {
@@ -1994,139 +3209,10 @@
         }, 4000);
     }
 
-    window.addEventListener('pagehide', stopMetadataPolling);
-
-    function stopTranscriptionPolling() {
-        if (transcriptionPollingTimer !== null) {
-            window.clearTimeout(transcriptionPollingTimer);
-            transcriptionPollingTimer = null;
-        }
-    }
-
-    function startTranscriptionPolling() {
-        if (!detailId || !(transcriptionList instanceof HTMLElement) || transcriptionPollingTimer !== null) {
-            return;
-        }
-
-        transcriptionPollingTimer = window.setTimeout(function pollTranscriptions() {
-            transcriptionPollingTimer = null;
-            loadTranscriptions().catch(function () {
-                startTranscriptionPolling();
-            });
-        }, 3000);
-    }
-
-    function activeTranscriptionExists(source) {
-        return latestTranscriptions.some(function (item) {
-            return sameTranscriptionSource(item, source) && (item.status === 'pending' || item.status === 'processing');
-        });
-    }
-
-    function completedTranscriptionExists(source) {
-        return latestTranscriptions.some(function (item) {
-            return sameTranscriptionSource(item, source) && item.status === 'completed';
-        });
-    }
-
-    function setTranscriptionConfirmVisible(visible) {
-        if (transcriptionConfirm instanceof HTMLElement) {
-            transcriptionConfirm.hidden = !visible;
-        }
-    }
-
-    function sourceFromButton(button) {
-        var type = button.dataset.transcriptionSourceType || button.dataset.sourceType || 'video';
-        var id = button.dataset.transcriptionSourceId || button.dataset.sourceId || detailId;
-
-        if (type !== 'export') {
-            type = 'video';
-        }
-
-        return {
-            type: type,
-            id: String(id || ''),
-            name: button.dataset.transcriptionSourceName || button.dataset.sourceName || (type === 'video' ? 'Video' : 'Exportacion')
-        };
-    }
-
-    function setPendingTranscriptionSource(source) {
-        pendingTranscriptionSource = source;
-
-        var label = page.querySelector('[data-video-transcription-source]');
-
-        if (label) {
-            label.textContent = source && source.name ? source.name : 'Video';
-        }
-    }
-
-    function createTranscription(language, button) {
-        if (!detailId || transcriptionActionPending || !pendingTranscriptionSource || !pendingTranscriptionSource.id) {
-            return;
-        }
-
-        transcriptionActionPending = true;
-
-        if (button instanceof HTMLButtonElement) {
-            button.disabled = true;
-        }
-
-        clearMessage();
-        var query = pendingTranscriptionSource.type === 'export'
-            ? {export_job_id: pendingTranscriptionSource.id}
-            : {video_id: pendingTranscriptionSource.id};
-
-        transcriptionApi('create', {requested_language: language || 'auto'}, query).then(function () {
-            setTranscriptionConfirmVisible(false);
-            showMessage('Transcripcion creada.', false);
-            return loadTranscriptions();
-        }).catch(function (error) {
-            showMessage(error.message, true);
-        }).finally(function () {
-            transcriptionActionPending = false;
-
-            if (button instanceof HTMLButtonElement) {
-                button.disabled = false;
-            }
-        });
-    }
-
-    function copyTranscriptionText(transcriptionId, button) {
-        if (!navigator.clipboard || !navigator.clipboard.writeText) {
-            showMessage('No se pudo acceder al portapapeles.', true);
-            return;
-        }
-
-        if (button instanceof HTMLButtonElement) {
-            button.disabled = true;
-        }
-
-        clearMessage();
-        fetch(transcriptionDownloadUrl(transcriptionId, 'txt'), {
-            method: 'GET',
-            credentials: 'same-origin',
-            headers: {
-                Accept: 'text/plain'
-            }
-        }).then(function (response) {
-            return response.text().then(function (text) {
-                if (!response.ok) {
-                    throw new Error(text || 'No se pudo obtener la transcripcion.');
-                }
-
-                return navigator.clipboard.writeText(text);
-            });
-        }).then(function () {
-            showMessage('Transcripcion copiada.', false);
-        }).catch(function () {
-            showMessage('No se pudo copiar la transcripcion.', true);
-        }).finally(function () {
-            if (button instanceof HTMLButtonElement) {
-                button.disabled = false;
-            }
-        });
-    }
-
-    window.addEventListener('pagehide', stopTranscriptionPolling);
+    window.addEventListener('pagehide', function () {
+        stopMetadataPolling();
+        stopProcessedPolling();
+    });
 
     if (fileInput instanceof HTMLInputElement) {
         fileInput.addEventListener('change', function () {
@@ -2165,7 +3251,7 @@
                 body: formData
             }).then(function () {
                 form.reset();
-                window.location.href = '/index.php?section=video-editor';
+                window.location.href = '/index.php?section=video';
             }).catch(function (error) {
                 showMessage(error.message, true);
             }).finally(function () {
@@ -2174,104 +3260,56 @@
         });
     }
 
-    page.addEventListener('click', function (event) {
-        var openButton = event.target instanceof HTMLElement ? event.target.closest('[data-video-transcription-open]') : null;
-
-        if (!(openButton instanceof HTMLButtonElement)) {
-            return;
-        }
-
-        var source = sourceFromButton(openButton);
-
-        if (!source.id) {
-            showMessage('Fuente de transcripcion invalida.', true);
-            return;
-        }
-
-        if (activeTranscriptionExists(source)) {
-            showMessage('Este video ya se esta transcribiendo.', true);
-            return;
-        }
-
-        if (completedTranscriptionExists(source) && !window.confirm('Crear una nueva transcripcion para este video?')) {
-            return;
-        }
-
-        setPendingTranscriptionSource(source);
-        setTranscriptionConfirmVisible(true);
-        clearMessage();
-
-        if (transcriptionLanguage instanceof HTMLSelectElement) {
-            transcriptionLanguage.focus();
-        }
-    });
-
-    if (transcriptionCancelButton instanceof HTMLButtonElement) {
-        transcriptionCancelButton.addEventListener('click', function () {
-            setTranscriptionConfirmVisible(false);
-        });
-    }
-
-    if (transcriptionCreateButton instanceof HTMLButtonElement) {
-        transcriptionCreateButton.addEventListener('click', function () {
-            var language = transcriptionLanguage instanceof HTMLSelectElement ? transcriptionLanguage.value : 'auto';
-
-            createTranscription(language, transcriptionCreateButton);
-        });
-    }
-
-    if (transcriptionList instanceof HTMLElement) {
-        transcriptionList.addEventListener('click', function (event) {
-            var button = event.target instanceof HTMLElement ? event.target.closest('[data-transcription-action]') : null;
+    if (processedPanel instanceof HTMLElement) {
+        processedPanel.addEventListener('click', function (event) {
+            var button = event.target instanceof HTMLElement ? event.target.closest('[data-export-action]') : null;
 
             if (!(button instanceof HTMLButtonElement)) {
                 return;
             }
 
-            var item = button.closest('[data-transcription-id]');
-            var transcriptionId = item instanceof HTMLElement ? item.dataset.transcriptionId || '' : '';
-            var action = button.dataset.transcriptionAction || '';
+            var item = button.closest('[data-export-job-id]');
+            var jobId = item instanceof HTMLElement ? item.dataset.exportJobId || '' : '';
+            var action = button.dataset.exportAction || '';
 
-            if (!transcriptionId || transcriptionActionPending) {
+            if (!jobId) {
                 return;
             }
 
-            if (action === 'copy') {
-                copyTranscriptionText(transcriptionId, button);
-                return;
-            }
+            if (action === 'play') {
+                var player = item instanceof HTMLElement ? item.querySelector('[data-export-player]') : null;
 
-            if (action === 'retry') {
-                var retrySource = sourceFromButton(button);
+                if (player instanceof HTMLVideoElement) {
+                    player.hidden = !player.hidden;
 
-                if (activeTranscriptionExists(retrySource)) {
-                    showMessage('Este video ya se esta transcribiendo.', true);
-                    return;
+                    if (!player.hidden) {
+                        player.play().catch(function () {});
+                    } else {
+                        player.pause();
+                    }
                 }
 
-                setPendingTranscriptionSource(retrySource);
-                createTranscription(button.dataset.language || 'auto', button);
                 return;
             }
 
-            if (action !== 'delete') {
+            if (action !== 'delete' || processedActionPending) {
                 return;
             }
 
-            if (!window.confirm('Eliminar esta transcripcion?')) {
+            if (!window.confirm('Eliminar esta exportacion?')) {
                 return;
             }
 
-            transcriptionActionPending = true;
+            processedActionPending = true;
             button.disabled = true;
             clearMessage();
-            transcriptionApi('delete', {id: transcriptionId}, {id: transcriptionId}).then(function () {
-                showMessage('Transcripcion eliminada.', false);
-                return loadTranscriptions();
+            exportApi('delete', {id: jobId}, {id: jobId}).then(function () {
+                showMessage('Exportacion eliminada.', false);
+                return loadProcessedExports();
             }).catch(function (error) {
                 showMessage(error.message, true);
             }).finally(function () {
-                transcriptionActionPending = false;
+                processedActionPending = false;
                 button.disabled = false;
             });
         });
@@ -2338,7 +3376,7 @@
                 }
 
                 if (!list || detailId) {
-                    window.location.href = '/index.php?section=video-editor&video_message=deleted';
+                    window.location.href = '/index.php?section=video&video_message=deleted';
                     return null;
                 }
 
@@ -2356,9 +3394,11 @@
         startMetadataPolling();
     }
 
-    loadTranscriptions().catch(function (error) {
-        showMessage(error.message, true);
-    });
+    if (processedPanel instanceof HTMLElement) {
+        loadProcessedExports().catch(function (error) {
+            showMessage(error.message, true);
+        });
+    }
 }());
 
 (function () {
@@ -2493,6 +3533,7 @@
 
         article.className = 'notification-item ' + (isRead ? 'is-read' : 'is-unread');
         article.dataset.notificationId = String(notification.id || '');
+        article.dataset.sourceModule = String(notification.source_module || '');
         main.className = 'notification-item__main';
 
         if (!compact) {
@@ -2662,6 +3703,180 @@
     });
 
     window.setInterval(refreshAll, 60000);
+}());
+
+(function () {
+    'use strict';
+
+    function normalizeHex(value) {
+        value = String(value || '').trim().toUpperCase();
+
+        return /^#[0-9A-F]{6}$/.test(value) ? value : '#2DD4BF';
+    }
+
+    function labelTextColor(color) {
+        color = normalizeHex(color);
+
+        var channels = [1, 3, 5].map(function (offset) {
+            var value = parseInt(color.slice(offset, offset + 2), 16) / 255;
+
+            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+        });
+        var luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+        var contrastWithDark = (luminance + 0.05) / 0.05;
+        var contrastWithLight = 1.05 / (luminance + 0.05);
+
+        return contrastWithDark >= contrastWithLight ? '#101418' : '#FFFFFF';
+    }
+
+    function applyOrganizationLabelColors(root) {
+        Array.prototype.slice.call((root || document).querySelectorAll('[data-label-color]')).forEach(function (chip) {
+            var color = normalizeHex(chip.getAttribute('data-label-color'));
+
+            chip.style.setProperty('--label-color', color);
+            chip.style.setProperty('--label-text-color', labelTextColor(color));
+        });
+    }
+
+    function labelIdsFromForm(form) {
+        return Array.prototype.slice.call(form.querySelectorAll('[data-label-picker] input[type="checkbox"]:checked')).map(function (input) {
+            return input.value;
+        });
+    }
+
+    function setLabelPickerValue(form, value) {
+        var selected = String(value || '').split(',').filter(Boolean);
+
+        Array.prototype.slice.call(form.querySelectorAll('[data-label-picker] input[type="checkbox"]')).forEach(function (input) {
+            input.checked = selected.indexOf(input.value) !== -1;
+        });
+    }
+
+    function labelsFromIds(form, value) {
+        var selected = String(value || '').split(',').filter(Boolean);
+
+        return selected.map(function (id) {
+            var escapedId = window.CSS && typeof window.CSS.escape === 'function' ? window.CSS.escape(id) : id.replace(/"/g, '\\"');
+            var input = form.querySelector('[data-label-picker] input[value="' + escapedId + '"]');
+            var chip = input instanceof HTMLInputElement ? input.closest('label').querySelector('[data-label-color]') : null;
+
+            return chip instanceof HTMLElement
+                ? { id: id, name: chip.textContent || '', color: normalizeHex(chip.getAttribute('data-label-color')) }
+                : null;
+        }).filter(Boolean);
+    }
+
+    function appendOrganizationLabels(parent, labels, limit) {
+        if (!Array.isArray(labels) || labels.length === 0) {
+            return;
+        }
+
+        var wrapper = document.createElement('span');
+        var visible = limit > 0 ? labels.slice(0, limit) : labels;
+        var remaining = Math.max(0, labels.length - visible.length);
+
+        wrapper.className = 'organization-labels';
+        visible.forEach(function (label) {
+            var chip = document.createElement('span');
+
+            chip.className = 'organization-label organization-label-chip';
+            chip.dataset.labelColor = normalizeHex(label.color);
+            chip.textContent = String(label.name || '');
+            wrapper.appendChild(chip);
+        });
+
+        if (remaining > 0) {
+            var more = document.createElement('span');
+
+            more.className = 'organization-label-chip organization-label-chip--more';
+            more.textContent = '+' + remaining;
+            wrapper.appendChild(more);
+        }
+
+        parent.appendChild(wrapper);
+        applyOrganizationLabelColors(wrapper);
+    }
+
+    function urgencyFor(deadlineAt, kind, status) {
+        if (status === 'completed') {
+            return null;
+        }
+
+        if (kind === 'project' && status === 'archived') {
+            return null;
+        }
+
+        if (!deadlineAt) {
+            return null;
+        }
+
+        var deadline = new Date(String(deadlineAt));
+
+        if (Number.isNaN(deadline.getTime())) {
+            return null;
+        }
+
+        var seconds = Math.floor((deadline.getTime() - Date.now()) / 1000);
+
+        if (seconds < 0) {
+            var overdueDays = Math.max(1, Math.ceil(Math.abs(seconds) / 86400));
+
+            return {
+                level: 'overdue',
+                label: 'Vencida hace ' + overdueDays + ' ' + (overdueDays === 1 ? 'dia' : 'dias')
+            };
+        }
+
+        if (seconds < 86400) {
+            return { level: 'critical', label: 'Menos de 24 h' };
+        }
+
+        var days = Math.ceil(seconds / 86400);
+
+        if (days > 30) {
+            return { level: 'neutral', label: 'Mas de 1 mes' };
+        }
+
+        return {
+            level: days >= 15 ? 'low' : (days >= 8 ? 'medium' : (days >= 5 ? 'warning' : (days >= 3 ? 'high' : 'urgent'))),
+            label: 'Falta' + (days === 1 ? '' : 'n') + ' ' + days + ' ' + (days === 1 ? 'dia' : 'dias')
+        };
+    }
+
+    function updateDeadlineUrgencies(root) {
+        Array.prototype.slice.call((root || document).querySelectorAll('[data-deadline-urgency]')).forEach(function (element) {
+            var urgency = urgencyFor(element.dataset.deadlineAt || '', element.dataset.deadlineKind || 'task', element.dataset.deadlineStatus || '');
+
+            if (!urgency) {
+                element.hidden = true;
+                return;
+            }
+
+            element.hidden = false;
+            element.textContent = urgency.label;
+            Array.prototype.slice.call(element.classList).forEach(function (className) {
+                if (className.indexOf('deadline-urgency--') === 0) {
+                    element.classList.remove(className);
+                }
+            });
+            element.classList.add('deadline-urgency--' + urgency.level);
+        });
+    }
+
+    window.MiCentralOrganizationLabels = {
+        applyColors: applyOrganizationLabelColors,
+        append: appendOrganizationLabels,
+        idsFromForm: labelIdsFromForm,
+        setPickerValue: setLabelPickerValue,
+        labelsFromIds: labelsFromIds,
+        updateUrgencies: updateDeadlineUrgencies
+    };
+
+    applyOrganizationLabelColors(document);
+    updateDeadlineUrgencies(document);
+    window.setInterval(function () {
+        updateDeadlineUrgencies(document);
+    }, 60000);
 }());
 
 (function () {
@@ -3200,6 +4415,14 @@
     var projectTaskNewButton = page.querySelector('[data-project-task-new]');
     var taskSpaceField = page.querySelector('[data-task-space-field]');
     var projectSpaceNote = page.querySelector('[data-project-space-note]');
+    var calendarPanel = page.querySelector('.calendar-panel');
+    var calendarDetail = page.querySelector('[data-calendar-detail]');
+    var calendarDetailType = page.querySelector('[data-calendar-detail-type]');
+    var calendarDetailTitle = page.querySelector('[data-calendar-detail-title]');
+    var calendarDetailBody = page.querySelector('[data-calendar-detail-body]');
+    var calendarDetailActions = page.querySelector('[data-calendar-detail-actions]');
+    var calendarDetailClose = page.querySelector('[data-calendar-detail-close]');
+    var organizationLabels = window.MiCentralOrganizationLabels || null;
 
     if (!formPanel || !form) {
         return;
@@ -3215,6 +4438,9 @@
     var projectPending = false;
     var activeTaskPrefill = false;
     var prefillReturnUrl = '';
+    var selectedCalendarItem = null;
+    var selectedCalendarDay = null;
+    var calendarDetailEntity = null;
 
     function showMessage(text, isError) {
         if (!message) {
@@ -3271,8 +4497,12 @@
                 return page.getAttribute('data-default-space-filter') || 'all';
             }
 
-            if (name === 'priority') {
-                return page.getAttribute('data-default-priority-filter') || 'all';
+            if (name === 'label') {
+                return page.getAttribute('data-default-label-filter') || 'all';
+            }
+
+            if (name === 'sort') {
+                return page.getAttribute('data-default-sort') || 'default';
             }
         }
 
@@ -3285,7 +4515,8 @@
         var currentProjectId = projectDetail instanceof HTMLElement ? projectDetail.dataset.projectId || '' : '';
         var status = selectedFilter('status');
         var space = selectedFilter('space');
-        var priority = selectedFilter('priority');
+        var label = selectedFilter('label');
+        var sort = selectedFilter('sort');
         var dueFrom = page.getAttribute('data-default-due-from') || '';
         var dueTo = page.getAttribute('data-default-due-to') || '';
         var dueBefore = page.getAttribute('data-default-due-before') || '';
@@ -3308,8 +4539,12 @@
             url.searchParams.set('space_id', spaceValueForApi(space));
         }
 
-        if (priority && priority !== 'all') {
-            url.searchParams.set('priority', priority);
+        if (label && label !== 'all') {
+            url.searchParams.set('label_id', label);
+        }
+
+        if (sort === 'deadline') {
+            url.searchParams.set('sort', 'deadline');
         }
 
         if (dueFrom) {
@@ -3354,7 +4589,7 @@
 
         return selectedFilter('status') !== 'pending'
             || selectedFilter('space') !== 'all'
-            || selectedFilter('priority') !== 'all'
+            || selectedFilter('label') !== 'all'
             || (filterForm.elements.time && filterForm.elements.time.value !== 'all');
     }
 
@@ -3405,20 +4640,8 @@
         return found ? found.textContent : 'Espacio no disponible';
     }
 
-    function priorityLabel(priority) {
-        if (priority === 'low') {
-            return 'Baja';
-        }
-
-        if (priority === 'high') {
-            return 'Alta';
-        }
-
-        return 'Normal';
-    }
-
     function statusLabel(status) {
-        return status === 'completed' ? 'Completada' : 'Pendiente';
+        return status === 'completed' ? 'Completada' : '';
     }
 
     function dateTimeInputValue(value) {
@@ -3430,11 +4653,47 @@
     }
 
     function dateTimeLabel(value) {
-        return value ? dateTimeInputValue(value).replace('T', ' ') : 'Sin fecha';
+        var normalized = dateTimeInputValue(value);
+        var match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+
+        if (!match) {
+            return '';
+        }
+
+        var months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+        var monthIndex = Number(match[2]) - 1;
+
+        if (monthIndex < 0 || monthIndex > 11) {
+            return '';
+        }
+
+        return String(Number(match[3])) + ' ' + months[monthIndex] + ' ' + match[1] + ' · ' + match[4] + ':' + match[5];
     }
 
-    function appendMeta(parent, text) {
+    function dateLabel(value) {
+        var match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+        if (!match) {
+            return '';
+        }
+
+        var months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+        var monthIndex = Number(match[2]) - 1;
+
+        if (monthIndex < 0 || monthIndex > 11) {
+            return '';
+        }
+
+        return String(Number(match[3])) + ' ' + months[monthIndex] + ' ' + match[1];
+    }
+
+    function appendMeta(parent, text, className) {
+        if (!text) {
+            return;
+        }
+
         var span = document.createElement('span');
+        span.className = className || 'organization-meta-token';
         span.textContent = text;
         parent.appendChild(span);
     }
@@ -3465,6 +4724,7 @@
         var endsAt = task.ends_at_input || dateTimeInputValue(endsAtLocal);
         var dueAt = task.due_at_input || dateTimeInputValue(dueAtLocal);
         var isSubtask = Boolean(forceSubtask) || parentTaskId !== '';
+        var labels = Array.isArray(task.labels) ? task.labels : [];
 
         article.className = 'task-item';
         article.classList.toggle('is-completed', status === 'completed');
@@ -3475,7 +4735,9 @@
         article.dataset.spaceId = spaceId;
         article.dataset.projectId = projectId;
         article.dataset.parentTaskId = parentTaskId;
-        article.dataset.priority = String(task.priority || 'normal');
+        article.dataset.labelIds = labels.map(function (label) {
+            return String(label.id || '');
+        }).filter(Boolean).join(',');
         article.dataset.startsAt = startsAt;
         article.dataset.endsAt = endsAt;
         article.dataset.dueAt = dueAt;
@@ -3492,12 +4754,15 @@
         }
 
         meta.className = 'task-meta';
-        appendMeta(meta, spaceLabel(spaceId));
-        appendMeta(meta, 'Prioridad ' + priorityLabel(String(task.priority || 'normal')));
-        appendMeta(meta, 'Inicio ' + dateTimeLabel(startsAtLocal));
-        appendMeta(meta, 'Fin ' + dateTimeLabel(endsAtLocal));
-        appendMeta(meta, 'Limite ' + dateTimeLabel(dueAtLocal));
-        appendMeta(meta, statusLabel(status));
+        appendMeta(meta, spaceLabel(spaceId), 'organization-space');
+        if (organizationLabels && typeof organizationLabels.append === 'function') {
+            organizationLabels.append(meta, labels, 3);
+        }
+        appendUrgency(meta, task.urgency, 'task', status, dueAt);
+        appendMeta(meta, dateTimeLabel(startsAtLocal) ? 'Inicio: ' + dateTimeLabel(startsAtLocal) : '');
+        appendMeta(meta, dateTimeLabel(endsAtLocal) ? 'Fin: ' + dateTimeLabel(endsAtLocal) : '');
+        appendMeta(meta, dateTimeLabel(dueAtLocal) ? 'Limite: ' + dateTimeLabel(dueAtLocal) : '');
+        appendMeta(meta, statusLabel(status), 'completion-state');
         main.appendChild(meta);
 
         actions.className = 'task-actions';
@@ -3505,7 +4770,6 @@
         if (!isSubtask && projectId) {
             actions.appendChild(createAction('subtask', 'Agregar subtarea', false));
         }
-        actions.appendChild(createAction('reminder', 'Agregar recordatorio', false));
         actions.appendChild(createAction('edit', 'Editar', false));
         if (pageMode === 'inbox') {
             actions.appendChild(createAction('organize', 'Organizar', false));
@@ -3515,7 +4779,494 @@
         article.appendChild(main);
         article.appendChild(actions);
 
+        if (organizationLabels && typeof organizationLabels.updateUrgencies === 'function') {
+            organizationLabels.updateUrgencies(article);
+        }
+
         return article;
+    }
+
+    function appendUrgency(parent, urgency, kind, status, deadlineAt) {
+        if (!urgency || status === 'completed' || (kind === 'project' && status === 'archived')) {
+            return;
+        }
+
+        var span = document.createElement('span');
+        var level = String(urgency.level || 'neutral').replace(/[^a-z0-9-]/g, '') || 'neutral';
+
+        span.className = 'deadline-urgency deadline-urgency--' + level;
+        span.dataset.deadlineUrgency = '';
+        span.dataset.deadlineKind = kind;
+        span.dataset.deadlineStatus = status;
+        span.dataset.deadlineAt = String(urgency.deadline_input || deadlineAt || '');
+        span.textContent = String(urgency.label || '');
+        parent.appendChild(span);
+    }
+
+    function calendarActionButton(action, label, danger) {
+        var button = document.createElement('button');
+
+        button.type = 'button';
+        button.className = danger ? 'button button--danger' : 'button button--secondary';
+        button.dataset.calendarDetailAction = action;
+        button.textContent = label;
+
+        return button;
+    }
+
+    function calendarDetailRow(label, value) {
+        if (!value) {
+            return null;
+        }
+
+        var row = document.createElement('p');
+        var strong = document.createElement('strong');
+
+        strong.textContent = label + ': ';
+        row.appendChild(strong);
+        row.appendChild(document.createTextNode(value));
+
+        return row;
+    }
+
+    function labelIdsFromEntity(entity) {
+        return (Array.isArray(entity.labels) ? entity.labels : []).map(function (label) {
+            return String(label.id || '');
+        }).filter(Boolean).join(',');
+    }
+
+    function taskDatasetElement(task) {
+        var element = document.createElement('article');
+        var spaceId = task.space_id === null || task.space_id === undefined ? '' : String(task.space_id);
+        var projectId = task.project_id === null || task.project_id === undefined ? '' : String(task.project_id);
+        var parentTaskId = task.parent_task_id === null || task.parent_task_id === undefined ? '' : String(task.parent_task_id);
+
+        element.dataset.taskId = String(task.id || '');
+        element.dataset.title = String(task.title || '');
+        element.dataset.description = String(task.description || '');
+        element.dataset.spaceId = spaceId;
+        element.dataset.projectId = projectId;
+        element.dataset.parentTaskId = parentTaskId;
+        element.dataset.labelIds = labelIdsFromEntity(task);
+        element.dataset.startsAt = String(task.starts_at_input || dateTimeInputValue(task.starts_at_local || task.starts_at || ''));
+        element.dataset.endsAt = String(task.ends_at_input || dateTimeInputValue(task.ends_at_local || task.ends_at || ''));
+        element.dataset.dueAt = String(task.due_at_input || dateTimeInputValue(task.due_at_local || task.due_at || ''));
+        element.dataset.status = String(task.status || 'pending');
+
+        return element;
+    }
+
+    function projectDatasetElement(project) {
+        var element = document.createElement('article');
+
+        element.dataset.projectId = String(project.id || '');
+        element.dataset.title = String(project.title || '');
+        element.dataset.description = String(project.description || '');
+        element.dataset.spaceId = project.space_id === null || project.space_id === undefined ? '' : String(project.space_id);
+        element.dataset.status = String(project.status || 'active');
+        element.dataset.startsOn = String(project.starts_on || '');
+        element.dataset.dueOn = String(project.due_on || '');
+        element.dataset.labelIds = labelIdsFromEntity(project);
+
+        return element;
+    }
+
+    function setSelectedCalendarItem(item) {
+        if (selectedCalendarItem && selectedCalendarItem !== item) {
+            selectedCalendarItem.classList.remove('is-selected');
+            selectedCalendarItem.setAttribute('aria-expanded', 'false');
+        }
+
+        selectedCalendarItem = item;
+
+        if (selectedCalendarItem) {
+            selectedCalendarItem.classList.add('is-selected');
+            selectedCalendarItem.setAttribute('aria-expanded', 'true');
+        }
+    }
+
+    function resetCalendarDetailPosition() {
+        if (!calendarDetail) {
+            return;
+        }
+
+        calendarDetail.classList.remove('calendar-detail--sheet');
+        calendarDetail.style.top = '';
+        calendarDetail.style.left = '';
+        calendarDetail.style.right = '';
+        calendarDetail.style.bottom = '';
+        calendarDetail.style.maxHeight = '';
+    }
+
+    function closeCalendarDetail(restoreFocus) {
+        if (calendarDetail) {
+            calendarDetail.hidden = true;
+            resetCalendarDetailPosition();
+            calendarDetail.classList.remove('calendar-detail--day');
+        }
+
+        var previousItem = selectedCalendarItem;
+
+        setSelectedCalendarItem(null);
+        calendarDetailEntity = null;
+
+        if (restoreFocus && previousItem) {
+            try {
+                previousItem.focus({ preventScroll: true });
+            } catch (error) {
+                previousItem.focus();
+            }
+        }
+    }
+
+    function focusCalendarDetail() {
+        if (!calendarDetail) {
+            return;
+        }
+
+        try {
+            calendarDetail.focus({ preventScroll: true });
+        } catch (error) {
+            calendarDetail.focus();
+        }
+    }
+
+    function positionCalendarDetail() {
+        if (!calendarDetail || !selectedCalendarItem || calendarDetail.hidden) {
+            return;
+        }
+
+        var gap = 12;
+        var viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        var isCompact = viewportWidth <= 768;
+
+        resetCalendarDetailPosition();
+        calendarDetail.classList.toggle('calendar-detail--sheet', isCompact);
+
+        if (isCompact) {
+            return;
+        }
+
+        var anchorRect = selectedCalendarItem.getBoundingClientRect();
+        var detailRect = calendarDetail.getBoundingClientRect();
+        var detailWidth = Math.min(detailRect.width || 368, Math.max(240, viewportWidth - (gap * 2)));
+        var detailHeight = Math.min(detailRect.height || 260, Math.max(160, viewportHeight - (gap * 2)));
+        var spaces = {
+            right: viewportWidth - anchorRect.right - gap,
+            left: anchorRect.left - gap,
+            below: viewportHeight - anchorRect.bottom - gap,
+            above: anchorRect.top - gap
+        };
+        var left = anchorRect.right + gap;
+        var top = anchorRect.top;
+
+        if (spaces.right >= detailWidth) {
+            left = anchorRect.right + gap;
+            top = anchorRect.top;
+        } else if (spaces.left >= detailWidth) {
+            left = anchorRect.left - detailWidth - gap;
+            top = anchorRect.top;
+        } else if (spaces.below >= detailHeight) {
+            left = anchorRect.left;
+            top = anchorRect.bottom + gap;
+        } else if (spaces.above >= detailHeight) {
+            left = anchorRect.left;
+            top = anchorRect.top - detailHeight - gap;
+        } else {
+            left = Math.max(gap, Math.min(anchorRect.left, viewportWidth - detailWidth - gap));
+            top = Math.max(gap, Math.min(anchorRect.top, viewportHeight - detailHeight - gap));
+        }
+
+        left = Math.max(gap, Math.min(left, viewportWidth - detailWidth - gap));
+        top = Math.max(gap, Math.min(top, viewportHeight - detailHeight - gap));
+
+        calendarDetail.style.left = left + 'px';
+        calendarDetail.style.top = top + 'px';
+        calendarDetail.style.maxHeight = Math.max(160, viewportHeight - top - gap) + 'px';
+    }
+
+    function renderCalendarLabels(parent, labels) {
+        if (organizationLabels && typeof organizationLabels.append === 'function') {
+            organizationLabels.append(parent, labels, 0);
+        }
+    }
+
+    function renderTaskCalendarDetail(task, project) {
+        if (!calendarDetail || !calendarDetailType || !calendarDetailTitle || !calendarDetailBody || !calendarDetailActions) {
+            return;
+        }
+
+        var status = String(task.status || 'pending');
+        var meta = document.createElement('div');
+        var description = String(task.description || '');
+
+        calendarDetailEntity = {
+            type: 'task',
+            data: task
+        };
+        calendarDetailType.textContent = 'Tarea';
+        calendarDetailTitle.textContent = String(task.title || '');
+        calendarDetailBody.replaceChildren();
+        calendarDetailActions.replaceChildren();
+        meta.className = 'task-meta calendar-detail__meta';
+        appendMeta(meta, spaceLabel(task.space_id === null || task.space_id === undefined ? '' : String(task.space_id)), 'organization-space');
+        renderCalendarLabels(meta, Array.isArray(task.labels) ? task.labels : []);
+        appendUrgency(meta, task.urgency, 'task', status, task.due_at_input || '');
+
+        if (meta.children.length > 0) {
+            calendarDetailBody.appendChild(meta);
+        }
+
+        [
+            calendarDetailRow('Inicio', dateTimeLabel(task.starts_at_local || task.starts_at || '')),
+            calendarDetailRow('Fin', dateTimeLabel(task.ends_at_local || task.ends_at || '')),
+            calendarDetailRow('Limite', dateTimeLabel(task.due_at_local || task.due_at || '')),
+            calendarDetailRow('Proyecto', project ? String(project.title || '') : ''),
+        ].forEach(function (row) {
+            if (row) {
+                calendarDetailBody.appendChild(row);
+            }
+        });
+
+        if (description) {
+            var paragraph = document.createElement('p');
+
+            paragraph.className = 'calendar-detail__description';
+            paragraph.textContent = description;
+            calendarDetailBody.appendChild(paragraph);
+        }
+
+        calendarDetailActions.appendChild(calendarActionButton('edit-task', 'Editar', false));
+        calendarDetailActions.appendChild(calendarActionButton(status === 'completed' ? 'reopen-task' : 'complete-task', status === 'completed' ? 'Reabrir' : 'Completar', false));
+        calendarDetailActions.appendChild(calendarActionButton('delete-task', 'Eliminar', true));
+    }
+
+    function renderProjectCalendarDetail(project) {
+        if (!calendarDetail || !calendarDetailType || !calendarDetailTitle || !calendarDetailBody || !calendarDetailActions) {
+            return;
+        }
+
+        var status = String(project.status || 'active');
+        var meta = document.createElement('div');
+        var description = String(project.description || '');
+
+        calendarDetailEntity = {
+            type: 'project',
+            data: project
+        };
+        calendarDetailType.textContent = 'Proyecto';
+        calendarDetailTitle.textContent = String(project.title || '');
+        calendarDetailBody.replaceChildren();
+        calendarDetailActions.replaceChildren();
+        meta.className = 'task-meta calendar-detail__meta';
+        appendMeta(meta, spaceLabel(project.space_id === null || project.space_id === undefined ? '' : String(project.space_id)), 'organization-space');
+        renderCalendarLabels(meta, Array.isArray(project.labels) ? project.labels : []);
+        appendUrgency(meta, project.urgency, 'project', status, project.due_on || '');
+
+        if (meta.children.length > 0) {
+            calendarDetailBody.appendChild(meta);
+        }
+
+        [
+            calendarDetailRow('Inicio', dateLabel(project.starts_on || '')),
+            calendarDetailRow('Limite', dateLabel(project.due_on || '')),
+        ].forEach(function (row) {
+            if (row) {
+                calendarDetailBody.appendChild(row);
+            }
+        });
+
+        if (description) {
+            var paragraph = document.createElement('p');
+
+            paragraph.className = 'calendar-detail__description';
+            paragraph.textContent = description;
+            calendarDetailBody.appendChild(paragraph);
+        }
+
+        calendarDetailActions.appendChild(calendarActionButton('edit-project', 'Editar proyecto', false));
+
+        if (status !== 'completed') {
+            calendarDetailActions.appendChild(calendarActionButton('complete-project', 'Completar', false));
+        }
+
+        if (status !== 'archived') {
+            calendarDetailActions.appendChild(calendarActionButton('archive-project', 'Archivar', false));
+        }
+    }
+
+    function showCalendarLoading(item) {
+        if (!calendarDetail || !calendarDetailType || !calendarDetailTitle || !calendarDetailBody || !calendarDetailActions) {
+            return;
+        }
+
+        setSelectedCalendarItem(item);
+        calendarDetail.classList.remove('calendar-detail--day');
+        calendarDetailType.textContent = 'Cargando';
+        calendarDetailTitle.textContent = 'Cargando detalle...';
+        calendarDetailBody.replaceChildren();
+        calendarDetailActions.replaceChildren();
+        calendarDetail.hidden = false;
+        positionCalendarDetail();
+        focusCalendarDetail();
+    }
+
+    function selectCalendarDay(day) {
+        if (selectedCalendarDay && selectedCalendarDay !== day) {
+            selectedCalendarDay.classList.remove('calendar-day--selected');
+            selectedCalendarDay.removeAttribute('data-calendar-client-selected');
+        }
+
+        selectedCalendarDay = day;
+
+        if (selectedCalendarDay) {
+            calendarPanel.querySelectorAll('.calendar-day--selected').forEach(function (candidate) {
+                if (candidate !== selectedCalendarDay) {
+                    candidate.classList.remove('calendar-day--selected');
+                    candidate.removeAttribute('data-calendar-client-selected');
+                }
+            });
+            selectedCalendarDay.classList.add('calendar-day--selected');
+            selectedCalendarDay.setAttribute('data-calendar-client-selected', 'true');
+        }
+    }
+
+    function calendarItemKindLabel(item) {
+        if (!item) {
+            return '';
+        }
+
+        var type = item.dataset.entityType || '';
+
+        if (type === 'project') {
+            return 'Proyecto';
+        }
+
+        if (item.classList.contains('calendar-item--task-due')) {
+            return 'Vencimiento';
+        }
+
+        return 'Tarea';
+    }
+
+    function openCalendarDay(openButton) {
+        if (!calendarDetail || !calendarDetailType || !calendarDetailTitle || !calendarDetailBody || !calendarDetailActions || !calendarPanel) {
+            return;
+        }
+
+        var day = openButton.closest('[data-calendar-day]');
+
+        if (!(day instanceof HTMLElement)) {
+            return;
+        }
+
+        var items = Array.prototype.slice.call(day.querySelectorAll('[data-calendar-item]'));
+
+        if (items.length === 0) {
+            return;
+        }
+
+        setSelectedCalendarItem(openButton);
+        selectCalendarDay(day);
+        calendarDetail.classList.add('calendar-detail--day');
+        calendarDetailType.textContent = String(items.length) + (items.length === 1 ? ' elemento' : ' elementos');
+        calendarDetailTitle.textContent = day.getAttribute('data-calendar-day-label') || day.getAttribute('data-calendar-day') || 'Dia seleccionado';
+        calendarDetailBody.replaceChildren();
+        calendarDetailActions.replaceChildren();
+        calendarDetailEntity = null;
+
+        items.forEach(function (item) {
+            var row = document.createElement('button');
+            var content = document.createElement('span');
+            var title = document.createElement('strong');
+            var meta = document.createElement('span');
+            var summary = item.querySelector('span');
+
+            row.type = 'button';
+            row.className = 'calendar-detail-day-item';
+            row.style.setProperty('--calendar-indicator-color', item.style.getPropertyValue('--calendar-indicator-color') || '');
+            title.textContent = item.childNodes.length > 0 ? String(item.childNodes[0].textContent || '').trim() : String(item.textContent || '').trim();
+            meta.textContent = [calendarItemKindLabel(item), summary ? String(summary.textContent || '').trim() : ''].filter(Boolean).join(' · ');
+            content.appendChild(title);
+            if (meta.textContent) {
+                content.appendChild(meta);
+            }
+            row.appendChild(content);
+            row.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                openCalendarItem(item);
+            });
+            calendarDetailBody.appendChild(row);
+        });
+
+        calendarDetail.hidden = false;
+        positionCalendarDetail();
+        focusCalendarDetail();
+    }
+
+    function fetchProjectById(projectId) {
+        if (!projectId) {
+            return Promise.resolve(null);
+        }
+
+        var url = new URL(projectApiUrl, window.location.origin);
+
+        url.searchParams.set('id', projectId);
+
+        return projectApi(url.toString(), 'GET').catch(function () {
+            return null;
+        });
+    }
+
+    function openCalendarItem(item) {
+        if (!calendarDetail) {
+            return;
+        }
+
+        var type = item.dataset.entityType || '';
+        var id = item.dataset.entityId || '';
+
+        if (!id || ['task', 'project'].indexOf(type) === -1) {
+            return;
+        }
+
+        showCalendarLoading(item);
+
+        if (type === 'task') {
+            var taskUrl = new URL(apiUrl, window.location.origin);
+
+            taskUrl.searchParams.set('id', id);
+            taskApi(taskUrl.toString(), 'GET')
+                .then(function (task) {
+                    var projectId = task && task.project_id !== null && task.project_id !== undefined ? String(task.project_id) : '';
+
+                    return fetchProjectById(projectId).then(function (project) {
+                        renderTaskCalendarDetail(task || {}, project);
+                        positionCalendarDetail();
+                    });
+                })
+                .catch(function (error) {
+                    closeCalendarDetail(false);
+                    showMessage(error.message, true);
+                });
+            return;
+        }
+
+        fetchProjectById(id)
+            .then(function (project) {
+                if (!project) {
+                    throw new Error('Proyecto no encontrado.');
+                }
+
+                renderProjectCalendarDetail(project);
+                positionCalendarDetail();
+            })
+            .catch(function (error) {
+                closeCalendarDetail(false);
+                showMessage(error.message, true);
+            });
     }
 
     function emptyState() {
@@ -3596,10 +5347,12 @@
         form.elements.title.value = task ? task.dataset.title : '';
         form.elements.description.value = task ? task.dataset.description : '';
         form.elements.space_id.value = task ? task.dataset.spaceId : '';
-        form.elements.priority.value = task ? task.dataset.priority : 'normal';
         form.elements.starts_at.value = task ? task.dataset.startsAt : '';
         form.elements.ends_at.value = task ? task.dataset.endsAt : '';
         form.elements.due_at.value = task ? task.dataset.dueAt : '';
+        if (organizationLabels && typeof organizationLabels.setPickerValue === 'function') {
+            organizationLabels.setPickerValue(form, task ? task.dataset.labelIds : '');
+        }
         updateProjectSpaceState();
 
         if (formTitle) {
@@ -3642,7 +5395,6 @@
         openForm(null, 'coincidence');
         form.elements.title.value = String(prefill.title || '');
         form.elements.description.value = String(prefill.description || '');
-        form.elements.priority.value = String(prefill.priority || 'normal');
         form.elements.starts_at.value = String(prefill.starts_at || '');
         form.elements.ends_at.value = String(prefill.ends_at || '');
         form.elements.due_at.value = String(prefill.due_at || '');
@@ -3697,7 +5449,7 @@
             space_id: projectId ? '' : form.elements.space_id.value,
             project_id: projectId,
             parent_task_id: form.elements.parent_task_id.value,
-            priority: form.elements.priority.value,
+            label_ids: organizationLabels && typeof organizationLabels.idsFromForm === 'function' ? organizationLabels.idsFromForm(form) : [],
             starts_at: form.elements.starts_at.value,
             ends_at: form.elements.ends_at.value,
             due_at: form.elements.due_at.value
@@ -3827,18 +5579,6 @@
                 return;
             }
 
-            if (action === 'reminder') {
-                if (typeof window.MiCentralOpenReminder === 'function') {
-                    window.MiCentralOpenReminder({
-                        taskId: item.dataset.taskId || '',
-                        projectId: '',
-                        title: item.dataset.title || '',
-                        targetLabel: 'Tarea: ' + (item.dataset.title || '')
-                    });
-                }
-                return;
-            }
-
             if (action === 'delete' && !window.confirm('Eliminar esta tarea?')) {
                 return;
             }
@@ -3886,6 +5626,9 @@
         projectForm.elements.status.value = project ? project.dataset.status : 'active';
         projectForm.elements.starts_on.value = project ? project.dataset.startsOn : '';
         projectForm.elements.due_on.value = project ? project.dataset.dueOn : '';
+        if (organizationLabels && typeof organizationLabels.setPickerValue === 'function') {
+            organizationLabels.setPickerValue(projectForm, project ? project.dataset.labelIds : '');
+        }
 
         if (projectFormTitle) {
             projectFormTitle.textContent = project ? 'Editar proyecto' : 'Nuevo proyecto';
@@ -3941,7 +5684,8 @@
                 space_id: projectForm.elements.space_id.value,
                 status: projectForm.elements.status.value,
                 starts_on: projectForm.elements.starts_on.value,
-                due_on: projectForm.elements.due_on.value
+                due_on: projectForm.elements.due_on.value,
+                label_ids: organizationLabels && typeof organizationLabels.idsFromForm === 'function' ? organizationLabels.idsFromForm(projectForm) : []
             };
 
             if (!payload.title) {
@@ -3992,18 +5736,6 @@
                 return;
             }
 
-            if (action === 'reminder') {
-                if (typeof window.MiCentralOpenReminder === 'function') {
-                    window.MiCentralOpenReminder({
-                        taskId: '',
-                        projectId: item.dataset.projectId || '',
-                        title: item.dataset.title || '',
-                        targetLabel: 'Proyecto: ' + (item.dataset.title || '')
-                    });
-                }
-                return;
-            }
-
             if (action === 'delete' && !window.confirm('Eliminar este proyecto? Sus tareas conservaran el registro sin proyecto.')) {
                 return;
             }
@@ -4033,6 +5765,147 @@
         });
     }
 
+    if (calendarPanel) {
+        calendarPanel.addEventListener('click', function (event) {
+            var item = event.target instanceof HTMLElement ? event.target.closest('[data-calendar-item]') : null;
+            var dayOpen = event.target instanceof HTMLElement ? event.target.closest('[data-calendar-day-open]') : null;
+
+            if (!(item instanceof HTMLButtonElement)) {
+                if (dayOpen instanceof HTMLButtonElement) {
+                    event.preventDefault();
+                    openCalendarDay(dayOpen);
+                }
+                return;
+            }
+
+            event.preventDefault();
+            openCalendarItem(item);
+        });
+
+        calendarPanel.addEventListener('keydown', function (event) {
+            var dayOpen = event.target instanceof HTMLElement ? event.target.closest('[data-calendar-day-open]') : null;
+
+            if (!(dayOpen instanceof HTMLButtonElement) || (event.key !== 'Enter' && event.key !== ' ')) {
+                return;
+            }
+
+            event.preventDefault();
+            openCalendarDay(dayOpen);
+        });
+    }
+
+    document.addEventListener('click', function (event) {
+        if (!calendarDetail || calendarDetail.hidden) {
+            return;
+        }
+
+        var target = event.target;
+
+        if (target instanceof Node && (calendarDetail.contains(target) || (selectedCalendarItem && selectedCalendarItem.contains(target)))) {
+            return;
+        }
+
+        closeCalendarDetail(false);
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && calendarDetail && !calendarDetail.hidden) {
+            closeCalendarDetail(true);
+        }
+    });
+
+    window.addEventListener('resize', positionCalendarDetail);
+    window.addEventListener('scroll', positionCalendarDetail, true);
+
+    if (calendarDetailClose) {
+        calendarDetailClose.addEventListener('click', function () {
+            closeCalendarDetail(true);
+        });
+    }
+
+    if (calendarDetailActions) {
+        calendarDetailActions.addEventListener('click', function (event) {
+            var button = event.target instanceof HTMLElement ? event.target.closest('[data-calendar-detail-action]') : null;
+
+            if (!(button instanceof HTMLButtonElement) || !calendarDetailEntity || actionPending) {
+                return;
+            }
+
+            var action = button.dataset.calendarDetailAction || '';
+            var entity = calendarDetailEntity.data || {};
+
+            if (action === 'edit-task') {
+                closeCalendarDetail(false);
+                openForm(taskDatasetElement(entity), 'edit');
+                return;
+            }
+
+            if (action === 'edit-project') {
+                closeCalendarDetail(false);
+                openProjectForm(projectDatasetElement(entity));
+                return;
+            }
+
+            if (action === 'delete-task' && !window.confirm('Eliminar esta tarea?')) {
+                return;
+            }
+
+            actionPending = true;
+            button.disabled = true;
+            clearMessage();
+
+            if (action === 'complete-task' || action === 'reopen-task' || action === 'delete-task') {
+                var taskUrl = new URL(apiUrl, window.location.origin);
+                var taskAction = action === 'reopen-task' ? 'reopen' : 'complete';
+
+                taskUrl.searchParams.set('id', String(entity.id || ''));
+
+                if (action !== 'delete-task') {
+                    taskUrl.searchParams.set('action', taskAction);
+                }
+
+                taskApi(taskUrl.toString(), action === 'delete-task' ? 'DELETE' : 'POST', {})
+                    .then(function () {
+                        closeCalendarDetail(false);
+                        showMessage(action === 'delete-task' ? 'Tarea eliminada.' : 'Tarea actualizada.', false);
+                        window.location.reload();
+                    })
+                    .catch(function (error) {
+                        showMessage(error.message, true);
+                    })
+                    .finally(function () {
+                        actionPending = false;
+                        button.disabled = false;
+                    });
+                return;
+            }
+
+            if (action === 'complete-project' || action === 'archive-project') {
+                var projectUrl = new URL(projectApiUrl, window.location.origin);
+
+                projectUrl.searchParams.set('id', String(entity.id || ''));
+                projectUrl.searchParams.set('action', action === 'archive-project' ? 'archive' : 'complete');
+                projectApi(projectUrl.toString(), 'POST', {})
+                    .then(function () {
+                        closeCalendarDetail(false);
+                        showMessage('Proyecto actualizado.', false);
+                        window.location.reload();
+                    })
+                    .catch(function (error) {
+                        showMessage(error.message, true);
+                    })
+                    .finally(function () {
+                        actionPending = false;
+                        button.disabled = false;
+                    });
+                return;
+            }
+
+            actionPending = false;
+            button.disabled = false;
+        });
+    }
+
     var editTaskId = new URLSearchParams(window.location.search).get('edit_task');
 
     if (editTaskId && list) {
@@ -4045,20 +5918,6 @@
         }
     }
 
-    var projectReminderNewButton = page.querySelector('[data-project-reminder-new]');
-
-    if (projectReminderNewButton && projectDetail instanceof HTMLElement) {
-        projectReminderNewButton.addEventListener('click', function () {
-            if (typeof window.MiCentralOpenReminder === 'function') {
-                window.MiCentralOpenReminder({
-                    taskId: '',
-                    projectId: projectDetail.dataset.projectId || '',
-                    title: projectDetail.dataset.title || '',
-                    targetLabel: 'Proyecto: ' + (projectDetail.dataset.title || '')
-                });
-            }
-        });
-    }
 }());
 
 (function () {
@@ -4084,6 +5943,7 @@
     var count = page.querySelector('[data-note-count]');
     var message = page.querySelector('[data-task-message]');
     var filterForm = page.querySelector('[data-note-filters]');
+    var organizationLabels = window.MiCentralOrganizationLabels || null;
     var pending = false;
     var actionPending = false;
 
@@ -4151,8 +6011,13 @@
         return found ? found.textContent : 'Espacio no disponible';
     }
 
-    function appendMeta(parent, text) {
+    function appendMeta(parent, text, className) {
+        if (!text) {
+            return;
+        }
+
         var span = document.createElement('span');
+        span.className = className || 'organization-meta-token';
         span.textContent = text;
         parent.appendChild(span);
     }
@@ -4163,15 +6028,22 @@
         var title = document.createElement('h3');
         var meta = document.createElement('div');
         var actions = document.createElement('div');
+        var complete = document.createElement('button');
         var edit = document.createElement('button');
         var remove = document.createElement('button');
         var spaceId = note.space_id === null || note.space_id === undefined ? '' : String(note.space_id);
+        var labels = Array.isArray(note.labels) ? note.labels : [];
+        var status = note.status === 'completed' ? 'completed' : 'active';
 
-        article.className = 'note-item';
+        article.className = 'note-item' + (status === 'completed' ? ' is-completed' : '');
         article.dataset.noteId = String(note.id);
         article.dataset.title = String(note.title || '');
         article.dataset.content = String(note.content || '');
         article.dataset.spaceId = spaceId;
+        article.dataset.status = status;
+        article.dataset.labelIds = labels.map(function (label) {
+            return String(label.id || '');
+        }).filter(Boolean).join(',');
 
         main.className = 'task-item__main';
         title.textContent = String(note.title || '');
@@ -4184,10 +6056,20 @@
         }
 
         meta.className = 'task-meta';
-        appendMeta(meta, noteSpaceLabel(spaceId));
+        appendMeta(meta, noteSpaceLabel(spaceId), 'organization-space');
+        if (organizationLabels && typeof organizationLabels.append === 'function') {
+            organizationLabels.append(meta, labels, 3);
+        }
+        if (status === 'completed') {
+            appendMeta(meta, 'Completada', 'completion-state');
+        }
         main.appendChild(meta);
 
         actions.className = 'task-actions';
+        complete.type = 'button';
+        complete.className = 'button button--secondary';
+        complete.dataset.noteAction = status === 'completed' ? 'reopen' : 'complete';
+        complete.textContent = status === 'completed' ? 'Reabrir' : 'Completar';
         edit.type = 'button';
         edit.className = 'button button--secondary';
         edit.dataset.noteAction = 'edit';
@@ -4196,6 +6078,7 @@
         remove.className = 'button button--danger';
         remove.dataset.noteAction = 'delete';
         remove.textContent = 'Eliminar';
+        actions.appendChild(complete);
         actions.appendChild(edit);
         actions.appendChild(remove);
 
@@ -4219,12 +6102,23 @@
         return wrapper;
     }
 
-    function selectedSpaceForApi() {
-        if (!filterForm || !(filterForm.elements.space instanceof HTMLSelectElement)) {
+    function selectedFilter(name) {
+        if (!filterForm) {
             return '';
         }
 
-        var control = filterForm.elements.space;
+        var control = filterForm.elements[name];
+
+        return control instanceof HTMLSelectElement ? control.value : '';
+    }
+
+    function selectedSpaceForApi() {
+        var control = filterForm ? filterForm.elements.space : null;
+
+        if (!(control instanceof HTMLSelectElement)) {
+            return '';
+        }
+
         var selectedOption = control.options[control.selectedIndex];
 
         if (!selectedOption || control.value === 'all') {
@@ -4237,9 +6131,19 @@
     function filteredListUrl() {
         var url = new URL(apiUrl, window.location.origin);
         var space = selectedSpaceForApi();
+        var label = selectedFilter('label');
+        var status = selectedFilter('status');
 
         if (space) {
             url.searchParams.set('space_id', space);
+        }
+
+        if (label && label !== 'all') {
+            url.searchParams.set('label_id', label);
+        }
+
+        if (status && status !== 'all') {
+            url.searchParams.set('status', status);
         }
 
         return url.toString();
@@ -4275,6 +6179,9 @@
         form.elements.title.value = note ? note.dataset.title : '';
         form.elements.content.value = note ? note.dataset.content : '';
         form.elements.space_id.value = note ? note.dataset.spaceId : '';
+        if (organizationLabels && typeof organizationLabels.setPickerValue === 'function') {
+            organizationLabels.setPickerValue(form, note ? note.dataset.labelIds : '');
+        }
 
         if (formTitle) {
             formTitle.textContent = note ? 'Editar nota' : 'Nueva nota';
@@ -4318,7 +6225,8 @@
         var payload = {
             title: form.elements.title.value.trim(),
             content: form.elements.content.value.trim(),
-            space_id: form.elements.space_id.value
+            space_id: form.elements.space_id.value,
+            label_ids: organizationLabels && typeof organizationLabels.idsFromForm === 'function' ? organizationLabels.idsFromForm(form) : []
         };
 
         if (!payload.title) {
@@ -4381,10 +6289,314 @@
         var url = new URL(apiUrl, window.location.origin);
         url.searchParams.set('id', item.dataset.noteId || '');
 
+        if (action === 'complete' || action === 'reopen') {
+            url.searchParams.set('action', action);
+        }
+
+        jsonApi(url.toString(), action === 'delete' ? 'DELETE' : 'POST', {})
+            .then(function () {
+                showMessage(action === 'delete' ? 'Nota eliminada.' : 'Nota actualizada.', false);
+                return refreshNotes();
+            })
+            .catch(function (error) {
+                showMessage(error.message, true);
+            })
+            .finally(function () {
+                actionPending = false;
+                button.disabled = false;
+            });
+    });
+}());
+
+(function () {
+    'use strict';
+
+    var page = document.querySelector('[data-tasks-page]');
+    var labelsPanel = page ? page.querySelector('[data-labels-panel]') : null;
+
+    if (!page || !labelsPanel || labelsPanel.dataset.labelsInitialized === 'true') {
+        return;
+    }
+
+    labelsPanel.dataset.labelsInitialized = 'true';
+
+    var apiUrl = labelsPanel.getAttribute('data-api-url') || '/api/organization/labels.php';
+    var csrfToken = page.getAttribute('data-csrf-token') || '';
+    var formPanel = page.querySelector('[data-label-form-panel]');
+    var form = page.querySelector('[data-label-form]');
+    var formTitle = page.querySelector('[data-label-form-title]');
+    var newButton = page.querySelector('[data-label-new]');
+    var cancelButton = page.querySelector('[data-label-cancel]');
+    var colorOutput = page.querySelector('[data-label-color-output]');
+    var list = page.querySelector('[data-label-list]');
+    var count = page.querySelector('[data-label-count]');
+    var message = page.querySelector('[data-task-message]');
+    var organizationLabels = window.MiCentralOrganizationLabels || null;
+    var pending = false;
+    var actionPending = false;
+
+    if (!formPanel || !(form instanceof HTMLFormElement) || !list) {
+        return;
+    }
+
+    function showMessage(text, isError) {
+        if (!message) {
+            return;
+        }
+
+        message.textContent = text;
+        message.hidden = false;
+        message.classList.toggle('task-message--error', Boolean(isError));
+        message.classList.toggle('task-message--success', !isError);
+    }
+
+    function clearMessage() {
+        if (!message) {
+            return;
+        }
+
+        message.textContent = '';
+        message.hidden = true;
+        message.classList.remove('task-message--error', 'task-message--success');
+    }
+
+    function jsonApi(url, method, payload) {
+        var options = {
+            method: method,
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json'
+            }
+        };
+
+        if (method !== 'GET') {
+            options.headers['Content-Type'] = 'application/json';
+            options.headers['X-CSRF-Token'] = csrfToken;
+            options.body = JSON.stringify(payload || {});
+        }
+
+        return fetch(url, options).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la solicitud.');
+                }
+
+                return body.data;
+            });
+        });
+    }
+
+    function updateColorOutput() {
+        if (colorOutput) {
+            colorOutput.textContent = String(form.elements.color.value || '').toUpperCase();
+        }
+    }
+
+    function labelArticle(label) {
+        var article = document.createElement('article');
+        var main = document.createElement('div');
+        var title = document.createElement('h3');
+        var chip = document.createElement('span');
+        var meta = document.createElement('div');
+        var color = document.createElement('span');
+        var actions = document.createElement('div');
+        var edit = document.createElement('button');
+        var remove = document.createElement('button');
+
+        article.className = 'label-item';
+        article.dataset.labelId = String(label.id || '');
+        article.dataset.name = String(label.name || '');
+        article.dataset.color = String(label.color || '#2DD4BF');
+
+        main.className = 'task-item__main';
+        chip.className = 'organization-label organization-label-chip';
+        chip.dataset.labelColor = article.dataset.color;
+        chip.textContent = article.dataset.name;
+        title.appendChild(chip);
+        main.appendChild(title);
+        meta.className = 'task-meta';
+        color.textContent = article.dataset.color;
+        meta.appendChild(color);
+        main.appendChild(meta);
+
+        actions.className = 'task-actions';
+        edit.type = 'button';
+        edit.className = 'button button--secondary';
+        edit.dataset.labelAction = 'edit';
+        edit.textContent = 'Editar';
+        remove.type = 'button';
+        remove.className = 'button button--danger';
+        remove.dataset.labelAction = 'delete';
+        remove.textContent = 'Eliminar';
+        actions.appendChild(edit);
+        actions.appendChild(remove);
+
+        article.appendChild(main);
+        article.appendChild(actions);
+
+        if (organizationLabels && typeof organizationLabels.applyColors === 'function') {
+            organizationLabels.applyColors(article);
+        }
+
+        return article;
+    }
+
+    function emptyState() {
+        var wrapper = document.createElement('div');
+        var marker = document.createElement('span');
+        var text = document.createElement('p');
+
+        wrapper.className = 'empty-state';
+        marker.setAttribute('aria-hidden', 'true');
+        text.textContent = 'No tienes etiquetas todavia.';
+        wrapper.appendChild(marker);
+        wrapper.appendChild(text);
+
+        return wrapper;
+    }
+
+    function renderLabels(labels) {
+        list.replaceChildren();
+
+        if (count) {
+            count.textContent = String(labels.length);
+        }
+
+        if (labels.length === 0) {
+            list.appendChild(emptyState());
+            return;
+        }
+
+        labels.forEach(function (label) {
+            list.appendChild(labelArticle(label));
+        });
+    }
+
+    function refreshLabels() {
+        return jsonApi(apiUrl, 'GET').then(function (labels) {
+            renderLabels(Array.isArray(labels) ? labels : []);
+        });
+    }
+
+    function openForm(label) {
+        clearMessage();
+        form.reset();
+        form.elements.label_id.value = label ? label.dataset.labelId : '';
+        form.elements.name.value = label ? label.dataset.name : '';
+        form.elements.color.value = label ? label.dataset.color : '#2DD4BF';
+        updateColorOutput();
+
+        if (formTitle) {
+            formTitle.textContent = label ? 'Editar etiqueta' : 'Nueva etiqueta';
+        }
+
+        formPanel.hidden = false;
+        form.elements.name.focus();
+    }
+
+    function closeForm() {
+        form.reset();
+        formPanel.hidden = true;
+        updateColorOutput();
+    }
+
+    function setPending(nextPending) {
+        pending = nextPending;
+        form.setAttribute('aria-busy', nextPending ? 'true' : 'false');
+        Array.prototype.slice.call(form.querySelectorAll('button, input')).forEach(function (control) {
+            control.disabled = nextPending;
+        });
+    }
+
+    if (newButton) {
+        newButton.addEventListener('click', function () {
+            openForm(null);
+        });
+    }
+
+    if (cancelButton) {
+        cancelButton.addEventListener('click', closeForm);
+    }
+
+    form.elements.color.addEventListener('input', updateColorOutput);
+
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+
+        if (pending) {
+            return;
+        }
+
+        var labelId = form.elements.label_id.value;
+        var payload = {
+            name: form.elements.name.value.trim(),
+            color: String(form.elements.color.value || '').toUpperCase()
+        };
+
+        if (!payload.name) {
+            showMessage('El nombre es obligatorio.', true);
+            return;
+        }
+
+        var url = new URL(apiUrl, window.location.origin);
+        var method = labelId ? 'PATCH' : 'POST';
+
+        if (labelId) {
+            url.searchParams.set('id', labelId);
+        }
+
+        setPending(true);
+        jsonApi(url.toString(), method, payload)
+            .then(function () {
+                closeForm();
+                showMessage(labelId ? 'Etiqueta actualizada.' : 'Etiqueta creada.', false);
+                return refreshLabels();
+            })
+            .catch(function (error) {
+                showMessage(error.message, true);
+            })
+            .finally(function () {
+                setPending(false);
+            });
+    });
+
+    list.addEventListener('click', function (event) {
+        var button = event.target instanceof HTMLElement ? event.target.closest('[data-label-action]') : null;
+
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        var item = button.closest('[data-label-id]');
+        var action = button.dataset.labelAction || '';
+
+        if (!(item instanceof HTMLElement)) {
+            return;
+        }
+
+        if (action === 'edit') {
+            openForm(item);
+            return;
+        }
+
+        if (action === 'delete' && !window.confirm('Eliminar esta etiqueta? Las tareas, proyectos y notas no se eliminaran.')) {
+            return;
+        }
+
+        if (actionPending) {
+            return;
+        }
+
+        actionPending = true;
+        button.disabled = true;
+
+        var url = new URL(apiUrl, window.location.origin);
+        url.searchParams.set('id', item.dataset.labelId || '');
+
         jsonApi(url.toString(), 'DELETE', {})
             .then(function () {
-                showMessage('Nota eliminada.', false);
-                return refreshNotes();
+                showMessage('Etiqueta eliminada.', false);
+                return refreshLabels();
             })
             .catch(function (error) {
                 showMessage(error.message, true);
@@ -5958,7 +8170,6 @@
             },
             body: JSON.stringify({
                 title: title,
-                priority: 'normal',
                 space_id: '',
                 due_at: ''
             })
@@ -5980,6 +8191,567 @@
             showQuickMessage(error.message, true);
         }).finally(function () {
             setQuickPending(false);
+        });
+    });
+}());
+
+(function () {
+    'use strict';
+
+    var page = document.querySelector('[data-discounts-benefits-page]');
+
+    if (!page || page.dataset.discountsBenefitsInitialized === 'true') {
+        return;
+    }
+
+    page.dataset.discountsBenefitsInitialized = 'true';
+
+    var modal = page.querySelector('[data-discount-benefit-modal]');
+    var form = page.querySelector('[data-discount-benefit-form]');
+    var title = page.querySelector('[data-discount-benefit-modal-title]');
+    var message = page.querySelector('[data-discount-benefit-message]');
+    var modeInput = form ? form.elements.mode : null;
+    var idInput = form ? form.elements.id : null;
+    var modes = page.querySelector('[data-discount-benefit-modes]');
+    var existingBlock = page.querySelector('[data-discount-benefit-existing]');
+    var createBlock = page.querySelector('[data-discount-benefit-create]');
+    var programSelect = page.querySelector('[data-benefit-program-select]');
+    var programSearch = page.querySelector('[data-benefit-program-search]');
+    var apiUrl = page.getAttribute('data-api-url') || '/api/discounts/user-benefits.php';
+    var csrfToken = page.getAttribute('data-csrf-token') || '';
+    var pending = false;
+
+    if (!(modal instanceof HTMLElement) || !(form instanceof HTMLFormElement) || !(modeInput instanceof HTMLInputElement)) {
+        return;
+    }
+
+    function setMessage(text, isError) {
+        if (!message) {
+            return;
+        }
+
+        message.textContent = text;
+        message.hidden = text === '';
+        message.classList.toggle('task-message--error', Boolean(isError));
+        message.classList.toggle('task-message--success', text !== '' && !isError);
+    }
+
+    function setPending(nextPending) {
+        var controls = Array.prototype.slice.call(form.querySelectorAll('button, input, select, textarea'));
+
+        pending = nextPending;
+        form.setAttribute('aria-busy', nextPending ? 'true' : 'false');
+        controls.forEach(function (control) {
+            control.disabled = nextPending;
+        });
+    }
+
+    function setMode(mode) {
+        modeInput.value = mode;
+
+        if (modes) {
+            modes.hidden = mode === 'edit';
+            modes.querySelectorAll('[data-discount-benefit-mode]').forEach(function (button) {
+                button.classList.toggle('is-active', button.getAttribute('data-discount-benefit-mode') === mode);
+            });
+        }
+
+        if (existingBlock) {
+            existingBlock.hidden = mode !== 'existing';
+        }
+
+        if (createBlock) {
+            createBlock.hidden = mode !== 'create';
+        }
+    }
+
+    function openModal(mode, card) {
+        form.reset();
+        setMessage('', false);
+
+        if (idInput) {
+            idInput.value = card ? card.getAttribute('data-user-benefit-id') || '' : '';
+        }
+
+        if (title) {
+            title.textContent = mode === 'edit' ? 'Editar beneficio' : 'Agregar beneficio';
+        }
+
+        if (mode === 'edit' && card) {
+            form.elements.nickname.value = card.getAttribute('data-nickname') || '';
+            form.elements.notes.value = card.getAttribute('data-notes') || '';
+            setMode('edit');
+        } else {
+            setMode(programSelect instanceof HTMLSelectElement ? 'existing' : 'create');
+        }
+
+        modal.hidden = false;
+        document.body.classList.add('modal-open');
+        var first = form.querySelector('input:not([type="hidden"]), select, textarea, button');
+
+        if (first instanceof HTMLElement) {
+            first.focus();
+        }
+    }
+
+    function closeModal() {
+        modal.hidden = true;
+        document.body.classList.remove('modal-open');
+        setMessage('', false);
+    }
+
+    function post(payload) {
+        return fetch(apiUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify(payload)
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo guardar el beneficio.');
+                }
+
+                return body.data;
+            });
+        });
+    }
+
+    page.addEventListener('click', function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        var opener = target.closest('[data-discount-benefit-open]');
+
+        if (opener instanceof HTMLElement) {
+            openModal(opener.getAttribute('data-discount-benefit-open') || 'create', opener.closest('[data-benefit-card]'));
+            return;
+        }
+
+        if (target.closest('[data-discount-benefit-close]')) {
+            closeModal();
+            return;
+        }
+
+        var modeButton = target.closest('[data-discount-benefit-mode]');
+
+        if (modeButton instanceof HTMLElement) {
+            setMode(modeButton.getAttribute('data-discount-benefit-mode') || 'existing');
+            return;
+        }
+
+        var filterButton = target.closest('[data-benefit-type-filter]');
+
+        if (filterButton instanceof HTMLElement) {
+            var type = filterButton.getAttribute('data-benefit-type-filter') || 'all';
+
+            page.querySelectorAll('[data-benefit-type-filter]').forEach(function (button) {
+                button.classList.toggle('is-active', button === filterButton);
+            });
+            page.querySelectorAll('[data-benefit-card]').forEach(function (card) {
+                card.hidden = type !== 'all' && card.getAttribute('data-benefit-type') !== type;
+            });
+            return;
+        }
+
+        var removeButton = target.closest('[data-discount-benefit-remove]');
+
+        if (removeButton instanceof HTMLElement) {
+            var card = removeButton.closest('[data-benefit-card]');
+
+            if (!(card instanceof HTMLElement)) {
+                return;
+            }
+
+            var label = card.getAttribute('data-benefit-name') || 'este beneficio';
+
+            if (!window.confirm('Quitar ' + label + ' de Mis beneficios?')) {
+                return;
+            }
+
+            post({
+                action: 'remove',
+                id: card.getAttribute('data-user-benefit-id') || ''
+            }).then(function () {
+                window.location.reload();
+            }).catch(function (error) {
+                window.alert(error.message);
+            });
+        }
+    });
+
+    modal.addEventListener('click', function (event) {
+        if (event.target === modal) {
+            closeModal();
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !modal.hidden) {
+            closeModal();
+        }
+    });
+
+    if (programSearch instanceof HTMLInputElement && programSelect instanceof HTMLSelectElement) {
+        programSearch.addEventListener('input', function () {
+            var query = programSearch.value.trim().toLowerCase();
+
+            Array.prototype.slice.call(programSelect.options).forEach(function (option, index) {
+                if (index === 0) {
+                    option.hidden = false;
+                    return;
+                }
+
+                option.hidden = query !== '' && String(option.getAttribute('data-search') || option.textContent || '').toLowerCase().indexOf(query) === -1;
+            });
+        });
+    }
+
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+
+        if (pending) {
+            return;
+        }
+
+        var mode = modeInput.value;
+        var payload = {
+            action: mode === 'edit' ? 'update' : (mode === 'create' ? 'create-and-add' : 'add-existing'),
+            id: idInput instanceof HTMLInputElement ? idInput.value : '',
+            benefit_program_id: form.elements.benefit_program_id ? form.elements.benefit_program_id.value : '',
+            provider_name: form.elements.provider_name ? form.elements.provider_name.value : '',
+            name: form.elements.name ? form.elements.name.value : '',
+            benefit_type: form.elements.benefit_type ? form.elements.benefit_type.value : '',
+            product_name: form.elements.product_name ? form.elements.product_name.value : '',
+            nickname: form.elements.nickname ? form.elements.nickname.value : '',
+            notes: form.elements.notes ? form.elements.notes.value : ''
+        };
+
+        setPending(true);
+        setMessage('', false);
+
+        post(payload).then(function () {
+            window.location.reload();
+        }).catch(function (error) {
+            setMessage(error.message, true);
+        }).finally(function () {
+            setPending(false);
+        });
+    });
+}());
+
+(function () {
+    'use strict';
+
+    var page = document.querySelector('[data-discounts-promotions-page]');
+
+    if (!page || page.dataset.discountsPromotionsInitialized === 'true') {
+        return;
+    }
+
+    page.dataset.discountsPromotionsInitialized = 'true';
+
+    var modal = page.querySelector('[data-discount-promotion-modal]');
+    var form = page.querySelector('[data-discount-promotion-form]');
+    var title = page.querySelector('[data-discount-promotion-modal-title]');
+    var message = page.querySelector('[data-discount-promotion-message]');
+    var merchantModeInput = form ? form.elements.merchant_mode : null;
+    var merchantExisting = page.querySelector('[data-discount-merchant-existing]');
+    var merchantCreate = page.querySelector('[data-discount-merchant-create]');
+    var discountType = page.querySelector('[data-discount-type-select]');
+    var discountValueField = page.querySelector('[data-discount-value-field]');
+    var apiUrl = page.getAttribute('data-api-url') || '/api/discounts/promotions.php';
+    var csrfToken = page.getAttribute('data-csrf-token') || '';
+    var pending = false;
+
+    if (!(modal instanceof HTMLElement) || !(form instanceof HTMLFormElement) || !(merchantModeInput instanceof HTMLInputElement)) {
+        return;
+    }
+
+    function setMessage(text, isError) {
+        if (!message) {
+            return;
+        }
+
+        message.textContent = text;
+        message.hidden = text === '';
+        message.classList.toggle('task-message--error', Boolean(isError));
+        message.classList.toggle('task-message--success', text !== '' && !isError);
+    }
+
+    function setPending(nextPending) {
+        pending = nextPending;
+        form.setAttribute('aria-busy', nextPending ? 'true' : 'false');
+        Array.prototype.slice.call(form.querySelectorAll('button, input, select, textarea')).forEach(function (control) {
+            control.disabled = nextPending;
+        });
+    }
+
+    function setMerchantMode(mode) {
+        merchantModeInput.value = mode;
+
+        if (merchantExisting) {
+            merchantExisting.hidden = mode !== 'existing';
+        }
+
+        if (merchantCreate) {
+            merchantCreate.hidden = mode !== 'create';
+        }
+
+        page.querySelectorAll('[data-discount-merchant-mode]').forEach(function (button) {
+            button.classList.toggle('is-active', button.getAttribute('data-discount-merchant-mode') === mode);
+        });
+    }
+
+    function updateDiscountValueVisibility() {
+        var type = discountType instanceof HTMLSelectElement ? discountType.value : 'percentage';
+        var show = type === 'percentage' || type === 'fixed_amount';
+
+        if (discountValueField) {
+            discountValueField.hidden = !show;
+        }
+
+        if (!show && form.elements.discount_value) {
+            form.elements.discount_value.value = '';
+        }
+    }
+
+    function checkedValues(name) {
+        return Array.prototype.slice.call(form.querySelectorAll('input[name="' + name + '"]:checked')).map(function (input) {
+            return input.value;
+        });
+    }
+
+    function setCheckedValues(name, values) {
+        var set = {};
+
+        values.forEach(function (value) {
+            set[String(value)] = true;
+        });
+        form.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
+            input.checked = Boolean(set[input.value]);
+        });
+    }
+
+    function payload(action) {
+        return {
+            action: action,
+            id: form.elements.id ? form.elements.id.value : '',
+            merchant_mode: form.elements.merchant_mode ? form.elements.merchant_mode.value : 'existing',
+            merchant_id: form.elements.merchant_id ? form.elements.merchant_id.value : '',
+            merchant_name: form.elements.merchant_name ? form.elements.merchant_name.value : '',
+            merchant_category: form.elements.merchant_category ? form.elements.merchant_category.value : '',
+            merchant_website_url: form.elements.merchant_website_url ? form.elements.merchant_website_url.value : '',
+            title: form.elements.title ? form.elements.title.value : '',
+            description: form.elements.description ? form.elements.description.value : '',
+            discount_type: form.elements.discount_type ? form.elements.discount_type.value : '',
+            discount_value: form.elements.discount_value ? form.elements.discount_value.value : '',
+            max_discount_clp: form.elements.max_discount_clp ? form.elements.max_discount_clp.value : '',
+            promo_code: form.elements.promo_code ? form.elements.promo_code.value : '',
+            channel: form.elements.channel ? form.elements.channel.value : '',
+            starts_on: form.elements.starts_on ? form.elements.starts_on.value : '',
+            ends_on: form.elements.ends_on ? form.elements.ends_on.value : '',
+            terms: form.elements.terms ? form.elements.terms.value : '',
+            source_url: form.elements.source_url ? form.elements.source_url.value : '',
+            is_active: form.elements.is_active && form.elements.is_active.checked ? '1' : '0',
+            weekdays: checkedValues('weekdays[]'),
+            benefit_program_ids: checkedValues('benefit_program_ids[]')
+        };
+    }
+
+    function request(method, data, query) {
+        var url = apiUrl;
+
+        if (query) {
+            url += '?' + new URLSearchParams(query).toString();
+        }
+
+        return fetch(url, {
+            method: method,
+            credentials: 'same-origin',
+            headers: method === 'GET' ? {
+                Accept: 'application/json'
+            } : {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: method === 'GET' ? undefined : JSON.stringify(data || {})
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok || !body.ok) {
+                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la promocion.');
+                }
+
+                return body.data;
+            });
+        });
+    }
+
+    function openModal(mode, id) {
+        form.reset();
+        setMessage('', false);
+        setMerchantMode('existing');
+
+        if (form.elements.is_active) {
+            form.elements.is_active.checked = true;
+        }
+
+        if (title) {
+            title.textContent = mode === 'edit' ? 'Editar promocion' : 'Nueva promocion';
+        }
+
+        if (form.elements.id) {
+            form.elements.id.value = id || '';
+        }
+
+        updateDiscountValueVisibility();
+        modal.hidden = false;
+        document.body.classList.add('modal-open');
+
+        if (mode === 'edit' && id) {
+            setPending(true);
+            request('GET', null, {id: id}).then(function (data) {
+                fillForm(data.promotion || {});
+            }).catch(function (error) {
+                setMessage(error.message, true);
+            }).finally(function () {
+                setPending(false);
+            });
+        }
+
+        var first = form.querySelector('input:not([type="hidden"]), select, textarea, button');
+
+        if (first instanceof HTMLElement) {
+            first.focus();
+        }
+    }
+
+    function fillForm(promotion) {
+        form.elements.id.value = String(promotion.id || '');
+        form.elements.merchant_id.value = promotion.merchant_id ? String(promotion.merchant_id) : '';
+        form.elements.title.value = String(promotion.title || '');
+        form.elements.description.value = String(promotion.description || '');
+        form.elements.discount_type.value = String(promotion.discount_type || 'percentage');
+        form.elements.discount_value.value = promotion.discount_value === null || promotion.discount_value === undefined ? '' : String(promotion.discount_value);
+        form.elements.max_discount_clp.value = promotion.max_discount_clp === null || promotion.max_discount_clp === undefined ? '' : String(promotion.max_discount_clp);
+        form.elements.promo_code.value = String(promotion.promo_code || '');
+        form.elements.channel.value = String(promotion.channel || 'both');
+        form.elements.starts_on.value = String(promotion.starts_on || '');
+        form.elements.ends_on.value = String(promotion.ends_on || '');
+        form.elements.terms.value = String(promotion.terms || '');
+        form.elements.source_url.value = String(promotion.source_url || '');
+        form.elements.is_active.checked = Number(promotion.is_active || 0) === 1;
+        setCheckedValues('weekdays[]', Array.isArray(promotion.weekdays) ? promotion.weekdays : []);
+        setCheckedValues('benefit_program_ids[]', Array.isArray(promotion.benefits) ? promotion.benefits.map(function (benefit) {
+            return String(benefit.id || '');
+        }) : []);
+        setMerchantMode('existing');
+        updateDiscountValueVisibility();
+    }
+
+    function closeModal() {
+        modal.hidden = true;
+        document.body.classList.remove('modal-open');
+        setMessage('', false);
+    }
+
+    page.addEventListener('click', function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        var merchantModeButton = target.closest('[data-discount-merchant-mode]');
+
+        if (merchantModeButton instanceof HTMLElement) {
+            setMerchantMode(merchantModeButton.getAttribute('data-discount-merchant-mode') || 'existing');
+            return;
+        }
+
+        if (target.closest('[data-discount-promotion-close]')) {
+            closeModal();
+            return;
+        }
+
+        var opener = target.closest('[data-discount-promotion-open]');
+
+        if (opener instanceof HTMLElement) {
+            var card = opener.closest('[data-discount-promotion-card]');
+            openModal(opener.getAttribute('data-discount-promotion-open') || 'create', card ? card.getAttribute('data-promotion-id') || '' : '');
+            return;
+        }
+
+        var actionButton = target.closest('[data-discount-promotion-action]');
+
+        if (actionButton instanceof HTMLElement) {
+            var actionCard = actionButton.closest('[data-discount-promotion-card]');
+            var action = actionButton.getAttribute('data-discount-promotion-action') || '';
+
+            if (!(actionCard instanceof HTMLElement)) {
+                return;
+            }
+
+            if (action === 'delete' && !window.confirm('Eliminar esta promocion manual?')) {
+                return;
+            }
+
+            if (action === 'deactivate' && !window.confirm('Desactivar esta promocion?')) {
+                return;
+            }
+
+            request('POST', {
+                action: action,
+                id: actionCard.getAttribute('data-promotion-id') || ''
+            }).then(function () {
+                window.location.reload();
+            }).catch(function (error) {
+                window.alert(error.message);
+            });
+        }
+    });
+
+    modal.addEventListener('click', function (event) {
+        if (event.target === modal) {
+            closeModal();
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !modal.hidden) {
+            closeModal();
+        }
+    });
+
+    if (discountType instanceof HTMLSelectElement) {
+        discountType.addEventListener('change', updateDiscountValueVisibility);
+    }
+
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+
+        if (pending) {
+            return;
+        }
+
+        var action = form.elements.id && form.elements.id.value ? 'update' : 'create';
+
+        setPending(true);
+        setMessage('', false);
+        request('POST', payload(action)).then(function () {
+            window.location.reload();
+        }).catch(function (error) {
+            setMessage(error.message, true);
+        }).finally(function () {
+            setPending(false);
         });
     });
 }());

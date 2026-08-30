@@ -76,7 +76,7 @@ modulos futuros / datos
 -> widgets reutilizables
 ```
 
-Mientras los modulos no existan, el servicio devuelve colecciones vacias, conteos coherentes y mensajes de estado vacio. La excepcion actual es Bandeja rapida, que obtiene tareas pendientes sin espacio (`organization_tasks.space_id IS NULL`) para mostrar cantidad y algunos elementos recientes. Hoy y Proximamente integran tareas con fecha, vencimientos y recordatorios pendientes; para recordatorios recurrentes solo consideran `next_remind_at`, no todas las repeticiones futuras. Los recordatorios se rotulan explicitamente como `Recordatorio:` para no confundirlos con el vencimiento propio de una tarea. Amigos en la U aporta un resumen de estado actual y un widget pequeno de proxima coincidencia academica usando `CoincidenceService`, sin duplicar la logica de horarios efectivos.
+Mientras los modulos no existan, el servicio devuelve colecciones vacias, conteos coherentes y mensajes de estado vacio. La excepcion actual es Bandeja rapida, que obtiene tareas pendientes sin espacio (`organization_tasks.space_id IS NULL`) para mostrar cantidad y algunos elementos recientes. Hoy y Proximamente integran tareas con fecha, vencimientos y recordatorios pendientes; para recordatorios recurrentes solo consideran `next_remind_at`, no todas las repeticiones futuras. Los recordatorios se rotulan explicitamente como `Recordatorio:` para no confundirlos con el vencimiento propio de una tarea. Horarios aporta un resumen de estado actual y un widget pequeno de proxima coincidencia academica usando `CoincidenceService`, sin duplicar la logica de horarios efectivos.
 
 ## Backend de tareas de Organizacion
 
@@ -95,6 +95,7 @@ Los endpoints internos principales viven en:
 /api/organization/tasks.php
 /api/organization/projects.php
 /api/organization/notes.php
+/api/organization/labels.php
 /api/organization/reminders.php
 ```
 
@@ -126,6 +127,14 @@ Operaciones de notas disponibles:
 - `PATCH /api/organization/notes.php?id=ID` o `PUT ...` actualiza titulo, contenido y espacio.
 - `DELETE /api/organization/notes.php?id=ID` elimina una nota propia.
 
+Operaciones de etiquetas disponibles:
+
+- `GET /api/organization/labels.php` lista etiquetas propias.
+- `GET /api/organization/labels.php?id=ID` obtiene una etiqueta propia.
+- `POST /api/organization/labels.php` crea una etiqueta.
+- `PATCH /api/organization/labels.php?id=ID` o `PUT ...` actualiza nombre y color.
+- `DELETE /api/organization/labels.php?id=ID` elimina una etiqueta propia y sus relaciones.
+
 Operaciones de recordatorios disponibles:
 
 - `GET /api/organization/reminders.php` lista recordatorios propios con filtros basicos.
@@ -137,9 +146,11 @@ Operaciones de recordatorios disponibles:
 - `POST /api/organization/reminders.php?id=ID&action=stop` detiene una recurrencia.
 - `DELETE /api/organization/reminders.php?id=ID` elimina un recordatorio propio.
 
-Las escrituras requieren sesion autenticada y token CSRF. El navegador no envia ni controla `user_id`; siempre se toma desde la sesion. `TaskService` valida entrada, estados, prioridades, fechas y ownership de `space_id`, `category_id`, `project_id` y `parent_task_id`. `TaskRepository` ejecuta consultas preparadas y limita todas las operaciones por `user_id`.
+Las escrituras requieren sesion autenticada y token CSRF. El navegador no envia ni controla `user_id`; siempre se toma desde la sesion. `TaskService` valida entrada, estados, fechas y ownership de `space_id`, `category_id`, `project_id`, `parent_task_id` y etiquetas. `TaskRepository` ejecuta consultas preparadas y limita todas las operaciones por `user_id`. `priority` queda como columna legacy/deprecated del esquema de tareas, sin control visible ni logica de ordenamiento.
 
 `ProjectService` valida que cada proyecto pertenezca a un espacio propio del usuario. El progreso de proyectos no se almacena en base de datos: `ProjectRepository` lo calcula con las tareas asociadas como `tasks_completed`, `tasks_total` y `progress_percent`. Al eliminar un proyecto, las tareas se conservan y `project_id` queda `NULL` segun la FK existente.
+
+`LabelService` gestiona etiquetas propias del usuario con nombre y color HEX `#RRGGBB`. Las relaciones con tareas, proyectos y notas son many-to-many y se sincronizan desde los servicios correspondientes despues de validar ownership de ambos lados. El navegador puede enviar `label_ids`, pero no rutas, `user_id` ni informacion de propiedad.
 
 Las tareas pueden asociarse a proyectos mediante `project_id`. Cuando se crea una tarea desde un proyecto, `TaskService` asigna o exige un `space_id` coherente con el espacio del proyecto. La interfaz no vuelve a pedir espacio en ese contexto y el backend rechaza un espacio distinto. Si cambia el espacio del proyecto, `ProjectService` sincroniza las tareas asociadas para mantener la herencia.
 
@@ -153,11 +164,13 @@ Las tareas tienen tres campos temporales:
 
 `TaskService` valida fechas y rechaza `ends_at` anterior a `starts_at`. Los filtros rapidos actuales de Tareas siguen usando `due_at`. El Calendario combina `starts_at`, `ends_at` y `due_at`.
 
+`DeadlineUrgencyService` calcula la urgencia al cargar datos, sin persistirla. Para tareas usa `due_at`; para proyectos usa `due_on`. La salida contiene texto entendible como `Faltan 7 dias`, `Menos de 24 h` o `Vencida hace 1 dia`, mas un nivel visual progresivo. Las tareas completadas se presentan como `Completada` y dejan de mostrarse como urgentes.
+
 La politica temporal del proyecto es: el usuario introduce y visualiza `DATETIME` en `America/Santiago`, y la base almacena esos valores en UTC. `App\Support\DateTimeHelper` centraliza la conversion de entrada local a UTC, la conversion de UTC a local, el valor de "ahora" y el formato para controles `datetime-local`. Los campos `DATE` puros de proyectos, como `starts_on` y `due_on`, no pasan por conversion de zona horaria.
 
 No hay SQL en vistas ni en el endpoint HTTP. La API es interna de la aplicacion y devuelve JSON con mensajes seguros, sin trazas ni detalles SQL.
 
-`NoteService` mantiene notas como registros simples separados de tareas y proyectos. Una nota tiene titulo, contenido y espacio opcional; no tiene estado, prioridad, fechas ni completado. `NoteRepository` limita todas sus consultas por `user_id`.
+`NoteService` mantiene notas como registros simples separados de tareas y proyectos. Una nota tiene titulo, contenido, espacio opcional, etiquetas opcionales y estado `active` o `completed`. Las notas activas generan un recordatorio interno diario deduplicado. `NoteRepository` limita todas sus consultas por `user_id`.
 
 `ReminderService` mantiene recordatorios dentro de Organizacion. Un recordatorio puede estar asociado a una tarea, a un proyecto o ser independiente, pero no puede apuntar simultaneamente a tarea y proyecto. La capa de servicio valida que `task_id` y `project_id` pertenezcan al mismo `user_id` autenticado. `remind_at` es obligatorio, se guarda en UTC y se presenta usando `America/Santiago`. Los estados disponibles son `pending`, `completed` y `dismissed`.
 
@@ -173,17 +186,21 @@ La idempotencia se basa en una restriccion unica de `notifications` sobre `remin
 
 Si el worker estuvo detenido, no genera una notificacion por cada ocurrencia perdida. Crea como maximo una notificacion atrasada para la ocurrencia vencida actual y avanza `next_remind_at` hasta la siguiente ocurrencia futura, o finaliza la recurrencia si `recurrence_until` ya no permite mas ejecuciones.
 
-El centro visual de notificaciones internas usa el flujo:
+El centro visual de notificaciones internas es un centro general de actividad. Reutiliza la tabla `notifications` para recordatorios, organizacion, video y futuras fuentes, sin crear un sistema paralelo:
 
 ```text
-Reminder
--> worker
+Reminders / Organization / Video / futuras fuentes
+-> workers
 -> notifications
 -> NotificationService
 -> campana / Dashboard / vista de notificaciones
 ```
 
-`NotificationService` lista notificaciones propias, cuenta no leidas y marca una o todas como leidas. La campana del header muestra las recientes y el contador de no leidas; la vista `/index.php?section=notifications` permite filtrar Todas, No leidas y Leidas sin agregar una entrada nueva al sidebar. Las escrituras pasan por la API interna `/api/notifications.php` con sesion autenticada, CSRF y restricciones por `user_id`. Esta fase no implementa Push, email, PWA ni WebSockets.
+`workers/process-notification-activity.php` crea actividad diaria deduplicada para cada usuario activo. Usa `America/Santiago` para el dia funcional y genera como maximo un resumen diario por usuario y fecha (`daily_agenda:<user_id>:YYYY-MM-DD`). Tambien crea notificaciones deduplicadas para tareas que vencen pronto, tareas que vencen hoy, tareas que comienzan hoy, tareas vencidas pendientes, notas activas, resumenes relevantes de proyectos activos y cambios terminales de exportaciones de video.
+
+La tabla `notifications` conserva `reminder_id` por compatibilidad, pero las nuevas notificaciones usan `source_module`, `entity_type`, `entity_id` y `dedupe_key`. La idempotencia de actividad se basa en `dedupe_key`; por ejemplo, una tarea que vence hoy crea una sola notificacion por dia aunque Cron corra cada minuto. Los workers obtienen siempre el propietario desde las entidades de dominio y nunca desde el navegador.
+
+`NotificationService` lista notificaciones propias, cuenta no leidas, marca una o todas como leidas y resuelve enlaces internos seguros segun entidad: tareas/proyectos/notas van a Organizacion, recordatorios mantienen su destino actual y video va a `/index.php?section=video&tab=processings`. La campana del header muestra las recientes, el contador de no leidas y una etiqueta discreta del modulo; la vista `/index.php?section=notifications` permite filtrar Todas, No leidas y Leidas sin agregar una entrada nueva al sidebar. Las escrituras pasan por la API interna `/api/notifications.php` con sesion autenticada, CSRF y restricciones por `user_id`. Esta fase no implementa Push, email, PWA ni WebSockets.
 
 `CalendarService` no crea ni duplica datos. Construye una vista de calendario desde tareas y proyectos existentes:
 
@@ -194,11 +211,13 @@ Reminder
 
 Los elementos del calendario enlazan al flujo existente de edicion/detalle de tareas o proyectos. No existe un editor especifico de calendario.
 
+El calendario marca el dia actual usando `America/Santiago` tanto en la vista mensual como semanal. El dia seleccionado por el usuario se representa como un estado visual independiente para que pueda coexistir con el indicador fijo de hoy.
+
 `organization_events` se conserva en base de datos pero no se usa por ahora. La Fase 2 no implementa Eventos como tipo separado porque las tareas ya soportan temporalidad suficiente mediante `starts_at`, `ends_at` y `due_at`.
 
-## Amigos en la U
+## Horarios
 
-El modulo Amigos en la U modela amigos y horarios ingresados manualmente. No rastrea ubicacion real, no usa GPS, no consulta mapas y no crea cuentas para amigos. Las vistas futuras estimaran donde deberia estar una persona segun su horario academico registrado.
+El modulo Horarios modela amigos y horarios ingresados manualmente. No rastrea ubicacion real, no usa GPS, no consulta mapas y no crea cuentas para amigos. Las vistas futuras estimaran donde deberia estar una persona segun su horario academico registrado.
 
 El modelo inicial usa:
 
@@ -263,7 +282,7 @@ ScheduleResolver
 
 Una coincidencia es informacion inferida desde horarios academicos. Una tarea es una decision explicita del usuario. Por eso las coincidencias no aparecen automaticamente en el Calendario de Organizacion ni crean recordatorios; solo se convierten en tareas si el usuario revisa y guarda el formulario de Organizacion. El espacio sugerido se busca por el `slug` `amigos` entre los espacios propios del usuario, sin depender de IDs fijos.
 
-La pantalla vive en `/index.php?section=friends` y mantiene una sola entrada principal en el sidebar: Amigos en la U. Dentro de la pantalla existe navegacion interna simple:
+La pantalla vive en `/index.php?section=friends` y mantiene una sola entrada principal en el sidebar: Horarios. Dentro de la pantalla existe navegacion interna simple:
 
 - Ahora;
 - Hoy;
@@ -300,13 +319,16 @@ Organizacion se maneja con pestanas internas, sin nuevas entradas en el sidebar:
 - Proyectos;
 - Notas;
 - Recordatorios;
-- Calendario.
+- Calendario;
+- Etiquetas.
 
-Tareas es la pestana inicial. Muestra tareas independientes por defecto y excluye tareas asociadas a proyectos y subtareas como elementos principales. Sus filtros combinables son espacio, estado, prioridad y tiempo. Bandeja sigue representando `space_id IS NULL`.
+Tareas es la pestana inicial. Muestra tareas independientes por defecto y excluye tareas asociadas a proyectos y subtareas como elementos principales. Sus filtros combinables son espacio, estado, etiqueta y tiempo, con opcion de ordenar por vencimiento. Bandeja sigue representando `space_id IS NULL`.
 
-Proyectos tiene sus propios filtros de espacio y estado. Puede abrirse un detalle de proyecto dentro de la misma pantalla para ver informacion del proyecto, rango de fechas, progreso y tareas asociadas.
+Proyectos tiene sus propios filtros de espacio, estado y etiqueta, con opcion de ordenar por vencimiento. Puede abrirse un detalle de proyecto dentro de la misma pantalla para ver informacion del proyecto, rango de fechas, progreso, urgencia derivada, etiquetas y tareas asociadas.
 
-Notas muestra solo notas y permite crear, editar, eliminar y filtrar por espacio. No mezcla notas con tareas ni proyectos.
+Notas muestra solo notas y permite crear, editar, eliminar y filtrar por espacio o etiqueta. No mezcla notas con tareas ni proyectos.
+
+Etiquetas administra los labels del usuario dentro de Organizacion. Cada etiqueta tiene nombre y color configurable, se muestra como chip compacto y puede asignarse a tareas, proyectos y notas desde sus formularios.
 
 Recordatorios muestra recordatorios pendientes, todos o completados/descartados. Pueden crearse desde la pestana interna, desde una tarea o desde un proyecto. Cuando se crean desde tarea/proyecto, la relacion queda fijada por contexto y la interfaz no vuelve a pedir el elemento recordado.
 
@@ -320,6 +342,30 @@ Los assets publicos del layout viven en:
 - `public/assets/js/app.js`.
 
 No se usa motor de templates, framework frontend, bundler ni CDN.
+
+## Autenticacion y administracion de usuarios
+
+La autenticacion local se centraliza en `App\Services\AuthService`, con `password_hash()`/`password_verify()` usando `PASSWORD_ARGON2ID`, normalizacion de username y rate limiting basado en `login_attempts`.
+
+El registro publico vive en `/register.php`. Un formulario valido crea un usuario activo con:
+
+```text
+is_active = 1
+```
+
+No se inicia sesion automaticamente; se redirige al login con el mensaje "Cuenta creada correctamente. Ya puedes iniciar sesion.". Despues de un login valido se guarda en sesion solo el `user_id` autenticado y el username.
+
+El acceso ya no requiere aprobacion manual. Si existen columnas heredadas de una version anterior (`approval_status`, `approved_at`, `approved_by_user_id`, `rejected_at`), se conservan por compatibilidad de migraciones y trazabilidad, pero no controlan el login. Las cuentas nuevas quedan con `approval_status = approved` cuando esa columna existe, y la migracion `202608080022_deprecate_user_approval_status.php` normaliza cuentas pendientes a activas.
+
+`is_active` permite desactivar o reactivar cuentas. `Session::isAuthenticated()` vuelve a consultar que la cuenta siga activa, de modo que una cuenta desactivada deja de pasar validaciones en la siguiente peticion.
+
+El rol administrativo minimo se almacena en `users.is_admin`. No hay usernames hardcodeados ni cuentas admin creadas automaticamente. Para convertir un usuario existente en administrador se usa:
+
+```sh
+make user-admin USERNAME=<username>
+```
+
+La vista de Configuracion / Usuarios no muestra `password_hash` ni contrasenas. Todas las acciones usan POST y CSRF, y un administrador autenticado no puede desactivar accidentalmente su propia cuenta.
 
 ## Navegacion interna
 
@@ -350,33 +396,401 @@ Casos previstos:
 - Limpieza de archivos temporales.
 - Tareas relacionadas con FFmpeg.
 
-El contenedor `worker` ejecuta Cron en primer plano. La frecuencia inicial para recordatorios y metadata de video es cada minuto:
+El contenedor `worker` ejecuta Cron en primer plano. La frecuencia inicial para recordatorios, video y el scheduler de collectors es cada minuto:
 
 ```text
 * * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-reminders.php
+17 * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-expense-notifications.php
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-notification-activity.php
 * * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-metadata.php
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-exports.php
+* * * * * . /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-discount-collectors.php
 ```
+
+Que Cron despierte cada minuto no significa que cada collector consulte sitios externos cada minuto. `process-discount-collectors.php` revisa `discount_collector_schedules.next_run_at`, reclama como maximo un collector pendiente y termina inmediatamente si no hay nada por ejecutar.
 
 Cada worker escribe en su propio log:
 
 - `storage/logs/reminders-worker.log`;
-- `storage/logs/video-metadata-worker.log`.
+- `storage/logs/expense-notifications-worker.log`;
+- `storage/logs/notification-activity-worker.log`;
+- `storage/logs/video-metadata-worker.log`;
+- `storage/logs/video-exports-worker.log`;
+- `storage/logs/discount-collectors-worker.log`.
 
 Los comandos manuales disponibles son:
 
 ```sh
 make process-reminders
+make process-expense-notifications
+make process-notification-activity
 make process-video-metadata
+make process-video-exports
+make process-discount-collectors
 ```
 
 Los logs se pueden seguir con:
 
 ```sh
 make worker-logs
+make expense-notification-logs
 make video-metadata-logs
 ```
 
+## Descuentos
+
+Descuentos funciona como modulo de descubrimiento automatico. Las promociones comerciales provienen de collectors globales y el usuario solo selecciona en su perfil que tarjetas, cuentas, membresias o beneficios posee. La Fase 8 registra fuentes reales publicas como Banco de Chile Beneficios, Santander Chile Beneficios y BancoEstado Beneficios. El flujo de dominio vigente es:
+
+```text
+Collectors
+-> PromotionImportPipeline
+-> discount_promotions globales
+-> discount_promotion_benefits
+-> discount_benefit_programs canonicos
+
+Usuario
+-> Configuracion / Perfil
+-> Mis tarjetas y beneficios
+-> user_discount_benefits
+-> DiscountCompatibilityService
+-> Para mi
+
+Usuario
+-> user_discount_favorites
+-> discount_promotions
+```
+
+`discount_benefit_programs` es un catalogo global de beneficios o productos que pueden habilitar promociones, como tarjetas bancarias, cuentas, beneficios moviles, wallets, membresias u otros. Los nombres visibles se conservan; la normalizacion se guarda aparte solo para evitar duplicados evidentes.
+
+`user_discount_benefits` guarda que beneficios posee cada usuario. El navegador no envia `user_id`; las operaciones toman el usuario desde la sesion y limitan siempre por ownership. Un usuario no puede repetir el mismo `benefit_program_id`.
+
+La seleccion vive en `Configuracion -> Mis tarjetas y beneficios`, no dentro de Descuentos:
+
+```text
+Usuario
+-> Configuracion / Perfil
+-> Mis tarjetas y beneficios
+-> user_discount_benefits
+-> discount_benefit_programs
+```
+
+Desde esa UI el usuario marca o desmarca programas existentes del catalogo directamente con un checkbox. El cambio se guarda sin recargar mediante JavaScript nativo y `POST` JSON a `/api/discounts/user-benefits.php`, con CSRF y usuario resuelto desde sesion. El navegador envia solo `benefit_program_id` y el estado deseado; el backend valida que el programa exista y este activo, y aplica la relacion en `user_discount_benefits` con ownership del usuario autenticado.
+
+El usuario no puede crear libremente BenefitPrograms, renombrarlos, modificar tipo ni eliminar globalmente un registro de `discount_benefit_programs`. Si falta un beneficio real, se corrige el collector/resolver o un catalogo controlado del sistema; no se piden ni almacenan numeros de tarjeta, CVV, RUT, claves, vencimientos ni datos bancarios sensibles.
+
+`discount_merchants` guarda comercios como catalogo simple. No hay sucursales ni GPS. La categoria del comercio puede existir como dato auxiliar, pero la busqueda de descuentos usa principalmente la categoria de la promocion porque un mismo comercio puede vender productos de rubros distintos.
+
+`discount_promotions` guarda promociones importadas por collectors. `starts_on` y `ends_on` son `DATE` comerciales, no instantes UTC. Una promocion sin fechas conocidas puede dejar ambos campos en `NULL`. `category` guarda una categoria controlada de la promocion (`restaurants`, `perfumes`, `technology`, etc.) normalizada por la capa comun. `source_type`, `collector_key`, `source_key`, `source_url` y `last_seen_at` identifican el origen oficial y permiten actualizar una promocion existente sin duplicarla. El CRUD manual de promociones queda deprecado para la experiencia normal; la UI no ofrece crear, editar, desactivar ni borrar promociones manualmente.
+
+La Fase 7.4 centraliza compatibilidad en `DiscountCompatibilityService`:
+
+```text
+user_discount_benefits activos
+-> DiscountCompatibilityService
+-> discount_promotion_benefits
+-> discount_promotions
+```
+
+Reglas:
+
+- una promocion sin `discount_promotion_benefits` es `general`;
+- una promocion con requirements compara solo por `benefit_program_id`;
+- varios requirements usan semantica OR;
+- si el usuario posee varios requirements, se reportan todas las coincidencias;
+- `user_discount_benefits.active = 0` no cuenta;
+- `discount_benefit_programs.active = 0` no produce compatibilidad activa;
+- no hay fuzzy matching, IA, scraping ni interpretacion de `terms`;
+- la compatibilidad no se persiste en BD porque cambia dinamicamente cuando el usuario agrega o quita beneficios.
+
+El resultado estructurado incluye `status` (`general`, `compatible`, `incompatible`), `required_benefits`, `matched_benefits` y `reason` amigable. Las consultas de listado cargan los beneficios activos del usuario una vez y precargan requirements de promociones en grupo para evitar N+1 evidente.
+
+La interfaz principal de Descuentos usa una sola entrada de sidebar y navegacion interna:
+
+```text
+Descuentos
+-> Para mi
+-> Favoritos
+-> Todos
+```
+
+`/index.php?section=discounts` abre `Para mi`. Esa vista consume `DiscountCompatibilityService` para mostrar promociones generales y promociones que coinciden con los beneficios activos del usuario. No muestra promociones incompatibles, inactivas ni vencidas; las vigentes aparecen antes que las proximas.
+
+`Para mi` incluye un enlace discreto a `Configuracion -> Mis tarjetas y beneficios` cuando el usuario necesita ajustar sus productos. No duplica CRUD de beneficios dentro de Descuentos.
+
+`Todos` es una vista de consulta del catalogo de promociones visibles. Muestra indicadores derivados de compatibilidad (`Te sirve`, `Para todos`, `Requiere ...`) sin acciones administrativas. Permite filtros de busqueda, comercio, categoria, canal, fuente/collector, beneficio requerido y estado (`Vigentes`, `Proximas`, `Vencidas`, `Todas`). No reemplaza la antigua tab `Hoy`; las oportunidades actuales se priorizan desde `Para mi`.
+
+La busqueda combina texto libre con categorias. `DiscountPromotionCategory` convierte alias deterministas como `perfumes`, `comida`, `ropa` o `tecnologia` en categorias internas, sin modificar el texto original ni usar IA. El filtro del selector usa codigos canonicos (`perfumes`, `fashion`, `technology`, etc.) y puede expandir categorias paraguas de forma centralizada: `food` incluye `food`, `restaurants` y `cafes`; `beauty` incluye `beauty` y `perfumes`. Las consultas SQL usan placeholders con nombres unicos por campo (`title`, `description`, `terms`, comercio y categoria) para funcionar con prepares nativos de PDO y evitar errores por placeholders repetidos.
+
+`Favoritos` deriva su estado desde `user_discount_favorites`. Los favoritos se agregan o quitan con POST autenticado, CSRF y `user_id` de sesion; una promocion favorita puede seguir apareciendo aunque luego quede vencida o inactiva para que el usuario pueda quitarla manualmente.
+
+Las vistas de descubrimiento reutilizan el mismo componente de card de promocion y el servicio `DiscountDiscoveryService`, que agrupa promociones, merchants, weekdays, requirements, favoritos y compatibilidad en consultas/preloads por lote. Las cards muestran comercio, descuento/titulo, fuente humana del collector, categoria amigable, beneficio requerido, dias, vigencia, canal, favorito y `Ver promocion oficial` cuando `source_url` existe y usa esquema `http` o `https`. La descripcion se muestra compacta con truncado visual; los terminos completos se abren solo desde `Ver condiciones`. En desktop las cards usan layout flexible para alinear las acciones al fondo de cada card.
+
+Compatibilidad y disponibilidad temporal son conceptos separados. `DiscountCompatibilityService` responde si el usuario tiene el beneficio necesario; `DiscountPromotionAvailabilityService` responde si una promocion esta activa, vigente y aplica al weekday de hoy. `isApplicableToday()` usa `America/Santiago`; si una promocion no tiene weekdays, aplica cualquier dia dentro de su vigencia. Una promocion futura o vencida puede ser compatible estructuralmente aunque no sea aplicable hoy. `Vencida` se deriva dinamicamente cuando `ends_on < hoy`; no se persiste un campo `expired`.
+
+`discount_promotion_benefits` define que beneficios habilitan una promocion. Si una promocion no tiene registros ahi, se interpreta como promocion general o sin requisito especifico conocido. Si tiene varios beneficios, la semantica inicial es OR: cualquiera de ellos puede habilitarla. No existe soporte AND ni motor generico de reglas; reglas mas especificas se conservan en `terms`.
+
+`discount_promotion_days` usa lunes = 1 y domingo = 7. Si una promocion no tiene dias asociados, puede aplicar cualquier dia dentro de su vigencia. Si tiene dias, solo aplica esos weekdays. La determinacion futura de "hoy" debe usar `America/Santiago`.
+
+`user_discount_favorites` relaciona usuarios con promociones favoritas y no duplica favoritos por `UNIQUE (user_id, promotion_id)`.
+
+No se persisten datos derivados como `compatible_with_user`, `is_today`, `days_remaining`, `is_favorite` dentro de promociones ni labels generados. La compatibilidad y vigencia se calcularan en fases posteriores desde:
+
+```text
+is_active
+AND (starts_on IS NULL OR starts_on <= today)
+AND (ends_on IS NULL OR ends_on >= today)
+AND (sin weekdays asociados OR weekday actual asociado)
+```
+
+### Recolectores automaticos de descuentos
+
+La Fase 8 agrega infraestructura comun para recolectores, un pipeline de normalizacion/deduplicacion/persistencia, un scheduler persistido en BD y collectors reales publicos. No envia notificaciones y no implementa scraping masivo. El flujo de ejecucion programada es:
+
+```text
+Cron del worker
+-> workers/process-discount-collectors.php
+-> DiscountCollectorScheduler
+-> discount_collector_schedules
+-> DiscountCollectorRunner
+-> DiscountCollectorInterface / CollectorHttpClient
+-> CollectorResult
+-> DiscountPromotionImportPipeline
+-> discount_promotions
+```
+
+Cada collector especifico tiene una key estable (`getKey()`), un nombre humano (`getName()`) y un metodo `collect(CollectorContext)` que devuelve `CollectedPromotion[]`. Un collector solo debe acceder a su fuente, extraer datos y devolver registros raw. No debe conocer PDO, `user_id`, favoritos, compatibilidad, deduplicacion, notificaciones ni escritura en `discount_promotions`.
+
+`CollectedPromotion` representa una promocion encontrada antes de normalizar. Requiere `source_key` y `title`; `source_url`, cuando existe, debe ser URL valida. Campos como `discount_text`, `max_discount_clp`, `starts_on_raw`, `weekdays_raw`, `benefit_names_raw`, `channel_raw` y `category_raw` pueden conservar texto parcial de la fuente. Cada collector especifico sigue limitado a extraer informacion y devolver registros raw.
+
+`PromotionNormalizer` transforma cada item raw en `NormalizedPromotion` usando reglas deterministas. Reconoce descuentos simples (`percentage`, `fixed_amount`, `special_price`, `other`), categorias controladas desde `category_raw` o fallback conservador, canales (`in_store`, `online`, `both`), fechas comerciales `DATE` en formatos no ambiguos y weekdays con lunes = 1 y domingo = 7. No usa IA, fuzzy matching, HTTP ni persistencia. Cuando una fecha/canal/descuento/categoria no puede interpretarse con seguridad, emite advertencias o deja el campo como `NULL` segun corresponda; no inventa numeros ni fechas.
+
+`DiscountMerchantResolver` resuelve `merchant_name` contra `discount_merchants` mediante texto comparable conservador y crea un comercio nuevo solo si no existe uno equivalente. La normalizacion de comparacion tolera mayusculas, espacios, acentos y puntuacion menor, pero no fusiona conceptos distintos como `Uber` y `Uber Eats`.
+
+`DiscountBenefitProgramResolver` resuelve beneficios contra `discount_benefit_programs`. Primero intenta coincidencias deterministas con el catalogo activo; si un collector futuro entrega un descriptor estructurado confiable puede crear un programa nuevo de catalogo. Si solo hay texto ambiguo no crea asociaciones falsas. Una promocion con benefits raw que no logran resolverse no se importa como promocion general, para evitar recomendaciones incorrectas.
+
+`PromotionFingerprintService` genera un SHA-256 desde datos normalizados relevantes: merchant, titulo, tipo/valor de descuento, vigencia, weekdays, benefits y canal. No incluye `collected_at`, `last_seen_at` ni IDs de BD.
+
+`PromotionDeduplicator` aplica estas reglas:
+
+- misma fuente exacta (`collector_key + source_key`) actualiza la promocion existente;
+- mismo collector + mismo fingerprint puede actualizar aunque cambie `source_key`, dejando advertencia;
+- mismo fingerprint entre collectors distintos se reporta como posible duplicado, pero no se fusiona automaticamente;
+- una promocion collector nunca sobrescribe una promocion manual, aunque el fingerprint coincida.
+
+`DiscountPromotionImportPipeline` conecta `CollectorResult -> normalizacion -> deduplicacion -> resolucion de merchant/benefits -> persistencia`. Cada promocion se persiste en una transaccion que cubre `discount_promotions`, merchant nuevo si corresponde, `discount_promotion_days` y `discount_promotion_benefits`. Si un item falla, se contabiliza y el pipeline continua con los siguientes.
+
+`DiscountCollectorRegistry` registra collectors por key y rechaza keys invalidas o duplicadas. En produccion registra `banco_chile`, `santander_chile` y `bancoestado`; los registries vacios en pruebas se crean explicitamente con `new DiscountCollectorRegistry([])`. Los collectors fake usados en pruebas viven solo dentro del test y no se registran en produccion.
+
+`DiscountCollectorRunner` resuelve un collector desde el registry, crea `CollectorContext`, ejecuta `collect()` y devuelve `CollectorResult`. Un resultado con cero items sigue siendo exitoso. Los errores de configuracion, HTTP o parseo se capturan como resultado fallido con mensaje controlado, sin stack traces ni HTML externo completo.
+
+`DiscountCollectorScheduler` consulta collectors registrados, crea schedules faltantes de forma idempotente y procesa como maximo un collector por invocacion. La primera sincronizacion crea `next_run_at = UTC_TIMESTAMP()` para que el siguiente ciclo pueda ejecutarlo, pero la sincronizacion por si sola no ejecuta collectors. Si el registry esta vacio, el worker termina limpiamente con `No collectors registered.`.
+
+La periodicidad vive en `discount_collector_schedules.interval_minutes`. Los valores por defecto se configuran con:
+
+```text
+COLLECTOR_DEFAULT_INTERVAL_MINUTES=1440
+COLLECTOR_MIN_INTERVAL_MINUTES=60
+COLLECTOR_RETRY_MINUTES=60
+COLLECTOR_STALE_AFTER_MINUTES=180
+```
+
+El scheduler usa `next_run_at` como fuente de verdad. Tras una ejecucion `success` o `partial` programa `next_run_at = fin + interval_minutes`; si falla el runner o el pipeline, marca `last_status = failed` y reprograma con `COLLECTOR_RETRY_MINUTES`. Cero promociones recolectadas cuenta como `success` si runner y pipeline terminan correctamente.
+
+La concurrencia se controla en MariaDB: el scheduler reclama un collector due dentro de una transaccion con `FOR UPDATE SKIP LOCKED`, marca `last_status = running` y ejecuta fuera de la transaccion. Otra instancia simultanea no puede reclamar el mismo collector mientras siga `running`. Si un worker queda interrumpido, una fila `running` cuyo `last_started_at` supere `COLLECTOR_STALE_AFTER_MINUTES` se considera stale, puede reclamarse de nuevo y el run anterior se marca `failed` con `error_type = interrupted`.
+
+Desde 8.4 cada ejecucion crea una fila en `discount_collector_runs`:
+
+```text
+Cron
+-> Scheduler
+-> Collector Run = running
+-> DiscountCollectorRunner
+-> DiscountPromotionImportPipeline
+-> Collector Run = success / partial / failed
+-> Schedule actualizado
+```
+
+`discount_collector_schedules` sigue representando solo el estado actual. `discount_collector_runs` representa historial. Los estados de runs son:
+
+- `running`: ejecucion iniciada;
+- `success`: collector y pipeline terminaron sin errores de items;
+- `partial`: pipeline termino pero uno o mas items fallaron;
+- `failed`: collector o pipeline no pudieron completar la ejecucion.
+
+Las metricas de runs se copian desde `PromotionImportResult`: recolectadas, normalizadas, creadas, actualizadas, deduplicadas, omitidas, warnings y errores. La duracion se mide con reloj monotono del proceso y se guarda como `duration_ms`.
+
+`DiscountCollectorErrorSanitizer` centraliza categorias y mensajes seguros. Mapea errores hacia `configuration`, `http`, `timeout`, `parse`, `normalization`, `validation`, `persistence`, `interrupted` o `unknown`. Antes de guardar o escribir logs elimina caracteres de control y redacta patrones comunes de secretos como `Authorization`, cookies, tokens y passwords. No se persiste HTML/JSON raw, headers completos, cookies ni stack traces.
+
+`DiscountCollectorLogger` centraliza el log tecnico `storage/logs/discount-collectors-worker.log`. Escribe una linea compacta por run con collector, trigger, status, metricas y duracion. Si el archivo no puede escribirse, no debe abortar una importacion valida; la fuente estructurada principal es la BD.
+
+Un schedule cuyo `collector_key` ya no esta registrado no se ejecuta ni se borra automaticamente; se reporta como `not_registered`. Deshabilitar un collector (`enabled = 0`) conserva su configuracion y evita ejecuciones. No existe endpoint web para disparar collectors: la ejecucion es solo CLI/worker.
+
+`CollectorHttpClient` centraliza timeout, connect timeout, redirects limitados, User-Agent identificable, tamano maximo de respuesta y validacion de status. Los collectors futuros deben usar este cliente en lugar de crear llamadas `curl_init()` propias. Antes de descargar valida que la URL sea HTTP/HTTPS, que el host este en la allowlist del collector y que no apunte a destinos locales, loopback, redes privadas o reservadas. Los redirects pasan por la misma validacion y no pueden saltar a hosts no permitidos.
+
+#### Fuente 1: Banco de Chile Beneficios
+
+`BancoChileDiscountCollector` implementa `DiscountCollectorInterface` con:
+
+- `collector_key`: `banco_chile`;
+- nombre: `Banco de Chile - Beneficios`;
+- pagina publica inicial: `https://sitiospublicos.bancochile.cl/personas/beneficios`;
+- endpoint publico observado en la propia pagina: `https://sitiospublicos.bancochile.cl/api/content/spaces/personas/types/beneficios/entries?per_page=100&page=N`;
+- host permitido: `sitiospublicos.bancochile.cl`;
+- frecuencia inicial: `COLLECTOR_DEFAULT_INTERVAL_MINUTES=1440`, una vez al dia salvo que el schedule se cambie por CLI.
+
+La pagina publica de beneficios carga un catalogo JSON paginado bajo el mismo dominio oficial. Cada entrada contiene `meta.slug`, `meta.tags` y `fields` como `Titulo`, `Extracto`, `Vigencia`, `Descripcion`, `Tipo Beneficio`, `Tarjetas Permitidas` y `Condiciones Comerciales`. El collector consulta ese JSON publico con `CollectorHttpClient`, una pagina a la vez, y no ejecuta JavaScript externo. No visita ni scrapea enlaces externos de comercios; si una promocion incluye un link de comercio, solo puede conservarse como dato raw cuando corresponda.
+
+`BancoChileBenefitsParser` separa el parseo del acceso HTTP. Usa `json_decode()` para el catalogo publico y `DOMDocument`/`DOMXPath` mediante `CollectorHtmlHelper` para limpiar fragmentos HTML de descripcion/terminos. No usa regex como parser HTML principal.
+
+La identidad estable de cada promocion es el `slug` oficial de `meta.slug`. `source_url` apunta al detalle oficial `https://sitiospublicos.bancochile.cl/personas/beneficios/detalle/{slug}`. Esto deja la identidad final como `banco_chile + source_key`.
+
+Campos que el parser intenta extraer de forma conservadora:
+
+- comercio/titulo desde `fields.Titulo`;
+- descripcion limpia desde `fields.Descripcion`;
+- descuento raw y hints de porcentaje desde `Tipo Beneficio`;
+- tope de descuento CLP solo cuando aparece como tope maximo de descuento;
+- vigencia raw desde `Vigencia` o `Condiciones Comerciales`;
+- dias raw desde tags y textos visibles;
+- canal raw desde extracto, descripcion y condiciones;
+- beneficios requeridos desde `Tarjetas Permitidas`, usando descriptores estructurados para `DiscountBenefitProgramResolver`;
+- terminos desde `Condiciones Comerciales`.
+
+Si el endpoint responde correctamente y trae cero entradas con una estructura valida, la ejecucion puede ser `success` con cero promociones. Si desaparece la estructura fundamental (`entries` o metadatos incompatibles) el parser lanza `CollectorParseException`; el scheduler/run queda `failed`, las promociones existentes no se borran y no se interpreta como eliminacion masiva de beneficios. La ausencia de una promocion en un run tampoco desactiva automaticamente registros previos.
+
+El collector respeta `COLLECTOR_BANCO_CHILE_MAX_ITEMS` para pruebas manuales acotadas y `COLLECTOR_BANCO_CHILE_REQUEST_DELAY_MS` para pausas entre paginas. No usa concurrencia paralela.
+
+#### Fuente 2: Santander Chile Beneficios
+
+`SantanderChileDiscountCollector` implementa `DiscountCollectorInterface` con:
+
+- `collector_key`: `santander_chile`;
+- nombre: `Santander Chile - Beneficios`;
+- pagina publica inicial: `https://banco.santander.cl/beneficios`;
+- endpoint publico usado por el widget oficial: `https://banco.santander.cl/beneficios/promociones.json?per_page=500&tags=home-disfrutadores&custom_fields=true&order_by=updated_at&desc=true&hash=1`;
+- host permitido: `banco.santander.cl`;
+- frecuencia inicial: `COLLECTOR_DEFAULT_INTERVAL_MINUTES=1440`, una vez al dia salvo que el schedule se cambie por CLI.
+
+La pagina publica visible carga una aplicacion Modyo/Vue y el HTML inicial puede mostrar solo `Cargando el sitio`. El widget oficial obtiene el catalogo mediante `$modyo.getPromotions()` contra el JSON publico anterior. Los filtros visibles (`Todos`, `Multiplica millas`, `Sabores`, `Cuotas sin interes`, `Verdes`, `Descuentos`, region, comuna, dia y tarjeta) se aplican en cliente sobre ese mismo catalogo mediante tags y custom fields, por lo que el collector no ejecuta una request por cada filtro.
+
+Cada promocion del JSON contiene campos como `slug`, `url`, `title`, `description`, `conditions`, `tags`, `start_date`, `end_date`, `discount` y `custom_fields` (`Bajada externa`, `Bajada interna`, `Vigencia`, `Region cobertura`, `Comuna cobertura`, `Sitio web beneficio`). El collector hace una sola request al catalogo por ejecucion, no visita detalles individuales porque el JSON ya trae descripcion, condiciones, vigencia, tags y URL oficial, y no scrapea comercios externos.
+
+`SantanderChileBenefitsParser` separa el parseo del acceso HTTP. Usa `json_decode()` para validar la estructura del catalogo y `DOMDocument`/`DOMXPath` mediante `CollectorHtmlHelper` para limpiar fragmentos HTML de descripcion/terminos. Si el JSON no contiene la estructura fundamental `promociones`, lanza `CollectorParseException`. Una respuesta valida con `promociones = []` y `total_entries = 0` puede ser `success` con cero items; una respuesta vacia que declara `total_entries > 0` se considera parse error.
+
+La identidad estable de cada promocion es el `slug` oficial. Si no existe, el parser puede usar `uuid` o `id` publicos como fallback determinista. `source_url` conserva la URL oficial de Santander solo si apunta a `banco.santander.cl`. La identidad final es `santander_chile + source_key`, por lo que una promocion parecida de Banco de Chile no se fusiona automaticamente con Santander.
+
+Campos que el parser intenta extraer de forma conservadora:
+
+- comercio/titulo desde `title`;
+- descripcion limpia desde `description`;
+- descuento raw desde `Bajada externa`, `Bajada interna` o textos de landing;
+- hints de porcentaje solo cuando el porcentaje es exacto; textos como `Hasta 20%` quedan como `other`;
+- cuotas sin interes, millas u otros beneficios no numericos como `other`;
+- codigo promocional solo cuando aparece una frase explicita como `Codigo promocional: ...`;
+- tope CLP solo cuando aparece como tope o descuento maximo;
+- vigencia raw desde `custom_fields.Vigencia`;
+- dias raw desde tags y textos visibles;
+- canal raw desde bajadas y descripcion;
+- beneficios requeridos desde tags/textos, con descriptores estructurados para `Tarjetas Credito Santander`, `Tarjetas Debito Santander`, `American Express Santander` y `WorldMember Limited Santander`;
+- terminos desde descripcion y `conditions`, sin scripts, estilos, navegacion ni raw HTML completo.
+
+El collector omite entradas marcadas como `empresas` o `no-home` y evita importar contenido institucional que no represente un beneficio concreto. Si aparece un requisito Santander nuevo que `DiscountBenefitProgramResolver` no logra resolver, el pipeline registra warning y no transforma esa promocion en general.
+
+Santander respeta `COLLECTOR_SANTANDER_MAX_ITEMS` para pruebas manuales acotadas. `COLLECTOR_SANTANDER_REQUEST_DELAY_MS` queda disponible si en el futuro se agregan multiples requests, pero la fuente actual usa una sola request por ejecucion y no requiere pausa entre paginas. El endpoint acepta un User-Agent libcurl estandar; el collector envia un identificador transparente `curl/{version} MiCentral-DiscountCollector/1.0`, sin simular navegador. No usa navegador automatizado, Playwright, Selenium ni ejecucion de JavaScript externo.
+
+#### Fuente 3: BancoEstado Beneficios
+
+`BancoEstadoDiscountCollector` implementa `DiscountCollectorInterface` con:
+
+- `collector_key`: `bancoestado`;
+- nombre: `BancoEstado - Beneficios`;
+- pagina publica inicial observada: `https://investor.bancoestado.cl/content/bancoestado-public/cl/es/home/home/todosuma---bancoestado-personas/todos-beneficios.html`;
+- paginas de detalle bajo `/content/bancoestado-public/cl/es/home/home/todosuma---bancoestado-personas/todos-beneficios/*.html`;
+- hosts permitidos: `www.bancoestado.cl` e `investor.bancoestado.cl`;
+- frecuencia inicial: `COLLECTOR_DEFAULT_INTERVAL_MINUTES=1440`, una vez al dia salvo que el schedule se cambie por CLI.
+
+La fuente observable es HTML publico. El catalogo muestra categorias como sabores, viajes, bienestar, hogar, vestuario, cuotas sin interes y otros servicios, ademas de filtros visuales por medio de pago. No se encontro un endpoint JSON publico estable equivalente a Santander; el collector usa HTML con `DOMDocument`/`DOMXPath`. No ejecuta JavaScript externo, no usa navegador automatizado y no visita comercios externos.
+
+El flujo implementado es:
+
+```text
+catalogo HTML BancoEstado
+-> enlaces internos de detalle
+-> detalle HTML BancoEstado
+-> CollectedPromotion[]
+-> pipeline comun
+```
+
+Cada detalle oficial suele tener secciones como `Detalle`, `Donde`, `Medios de Pago` y `Vigencia`. `BancoEstadoBenefitsParser` extrae lineas utiles, elimina scripts/estilos/navegacion/footer y valida senales minimas de estructura. Si recibe `Access Denied`, pagina no encontrada o una estructura sin senales de beneficios BancoEstado, lanza `CollectorParseException`; el run queda fallido y no se borran promociones anteriores.
+
+La identidad estable usa el slug de la pagina individual. Por ejemplo, `papa-john-s---beneficios-bancoestado.html` produce `source_key = papa-john-s`. Cuando una misma pagina contiene mas de un beneficio, el parser agrega un sufijo deterministico derivado del texto de descuento, vigencia o cupon, no de la posicion temporal del listado. La identidad final es `bancoestado + source_key`.
+
+Campos que el parser intenta extraer de forma conservadora:
+
+- comercio desde el `<title>` o el contenido principal del detalle;
+- descripcion desde `Detalle`, `Donde` y `Vigencia`;
+- porcentaje exacto como `percentage`;
+- monto fijo solo cuando el texto dice explicitamente `dto`, `dcto` o `descuento`;
+- cuotas sin interes y precios preferenciales como `other`;
+- tope CLP solo cuando aparece como tope o descuento maximo;
+- compra minima queda en `terms` y no se guarda como tope;
+- codigo promocional solo si es un cupon fijo publico;
+- primeros digitos de tarjeta, RUT, BIN u otros datos sensibles no se guardan como `promo_code`;
+- fechas comerciales raw desde `Vigencia`;
+- dias raw compactos como `martes`, `domingo` o `todos los dias`;
+- canal raw desde `Donde` y detalle;
+- beneficios requeridos como descriptores estructurados para `Tarjetas Debito BancoEstado`, `Tarjetas Credito BancoEstado`, `Tarjetas Credito Visa BancoEstado`, `Tarjetas Credito Mastercard BancoEstado` y `CuentaRUT BancoEstado`.
+
+La deteccion de productos es conservadora. Si el detalle dice `Tarjetas de Debito o Credito BancoEstado`, se entregan ambos requirements con semantica OR. Si dice `Visa` o `Mastercard`, se conserva esa especificidad. Si el texto dice `excluye CuentaRUT`, no se asocia CuentaRUT aunque aparezca mencionada en condiciones.
+
+BancoEstado respeta `COLLECTOR_BANCOESTADO_MAX_ITEMS` para pruebas manuales acotadas y `COLLECTOR_BANCOESTADO_REQUEST_DELAY_MS` para pausar entre detalles. La implementacion realiza una request al catalogo y una por cada detalle unico hasta alcanzar el limite configurado. El acceso directo con `curl` desde el entorno actual recibe bloqueo Akamai (`403`) en `investor.bancoestado.cl` o pagina no encontrada en algunas rutas `www.bancoestado.cl`; por diseno el collector falla de forma controlada en ese caso y registra el error mediante 8.4, sin intentar evadir la proteccion.
+
+Las promociones importadas usan `source_type = collector`, `collector_key`, `source_key`, `source_url`, `last_seen_at` y `dedupe_fingerprint`. `last_seen_at` se actualiza cada vez que la fuente vuelve a observar una promocion. La ausencia en un run no desactiva automaticamente promociones, porque una fuente puede fallar parcialmente o cambiar paginacion. Si una promocion collector existente fue desactivada explicitamente, el pipeline no la reactiva automaticamente.
+
+Los collectors son globales, no por usuario:
+
+```text
+Collector
+-> promociones globales
+-> DiscountPromotionImportPipeline
+-> discount_promotions source_type=collector
+
+Usuario
+-> Configuracion / Mis tarjetas y beneficios
+-> DiscountCompatibilityService
+-> Para mi
+```
+
+La compatibilidad seguira calculandose dinamicamente desde `user_discount_benefits`; no se recolectan descuentos distintos por cada usuario.
+
+La ejecucion manual vive en `workers/run-discount-collector.php` y puede invocarse mediante `make run-discount-collector COLLECTOR=<key>`. Para probar sin escribir en BD existe `make run-discount-collector COLLECTOR=<key> DRY_RUN=1`, que ejecuta collector, normalizacion, validacion y deduplicacion, pero no persiste cambios. Esta ejecucion manual no altera `discount_collector_schedules.next_run_at`, para no romper el calendario automatico.
+
+Los comandos operativos simples del scheduler son:
+
+```sh
+make process-discount-collectors
+make discount-scheduler-status
+make discount-collector-runs [COLLECTOR=<key>]
+make discount-collector-run RUN_ID=<id>
+make discount-collector-enable COLLECTOR=<key>
+make discount-collector-disable COLLECTOR=<key>
+make discount-collector-interval COLLECTOR=<key> MINUTES=1440
+```
+
+El scheduler no depende del navegador ni de Cloudflare Tunnel. Si Docker y el contenedor `worker` estan activos, Cron continua evaluando `next_run_at` persistido en MariaDB aunque nadie visite Mi Central.
+
 ## Video y FFmpeg
+
+Video usa una sola entrada principal en el sidebar. Al abrir `/index.php?section=video` se muestra la pestaña interna `Editor`; `/index.php?section=video&tab=processings` muestra `Procesamientos`. Los enlaces historicos `section=video-editor` y `section=video-processing` redirigen de forma segura a la nueva ruta para no romper deep links, pero el sidebar ya no renderiza submenu, flecha ni entradas separadas para Editor/Procesamientos.
+
+```text
+Sidebar
+-> Video
+   -> Editor
+   -> Procesamientos
+```
+
+Mientras el usuario este en Editor o Procesamientos, la entrada lateral `Video` permanece activa y las pestañas internas indican la subseccion actual.
 
 El editor basico de video procesara archivos localmente mediante FFmpeg.
 
@@ -399,7 +813,7 @@ Upload
 -> archivo original fuera de public
 ```
 
-`storage/video` esta fuera de `public/` y se comparte entre `web` y `worker` mediante el bind mount del proyecto completo en `/var/www/html`. Los archivos subidos, temporales, trabajos y exportaciones no se sirven directamente por Apache. La estructura preparada es:
+`storage/video` esta fuera de `public/` y se comparte entre `web` y `worker`. En desarrollo local se usa el bind mount del proyecto completo en `/var/www/html`; en produccion `compose.prod.yaml` copia el codigo dentro de la imagen y monta volumenes persistentes separados para storage. Los archivos subidos, temporales, trabajos y exportaciones no se sirven directamente por Apache. La estructura preparada es:
 
 - `storage/video/uploads`
 - `storage/video/jobs`
@@ -504,70 +918,246 @@ La ejecucion de FFprobe/FFmpeg no debe construir comandos concatenando valores r
 
 ## Video y transcripcion local
 
-La transcripcion de video es una extension local del modulo Video y se ejecuta exclusivamente dentro del contenedor `worker`. No usa APIs externas, no envia audio ni video fuera del equipo y no agrega servicios a Docker Compose.
+La transcripcion local con Whisper fue retirada en la fase 11.2 para preparar el despliegue ARM64 en Oracle Cloud. Ya no hay UI, rutas HTTP, API, workers, cron, comandos Make, variables de entorno ni notificaciones activas para transcribir videos.
 
-El flujo actual es:
+Las tablas historicas `video_transcriptions` y `video_transcription_segments` se conservan en base de datos por trazabilidad y compatibilidad de migraciones. La fase 11.2 no borra tablas ni datos de transcripcion, y tampoco agrega migraciones destructivas.
 
-```text
-video_files o video_export_jobs completed
--> video_transcriptions pending
--> worker
--> FFmpeg extrae audio WAV mono 16 kHz PCM s16le
--> storage/video/temp
--> whisper.cpp
--> salida JSON con timestamps
--> WhisperTranscriptParser
--> segmentos start_seconds / end_seconds / text
--> video_transcription_segments
--> full_text
--> completed
-```
+## Gastos
 
-`whisper.cpp` se instala en la imagen del `worker` desde una version fija, no desde una rama `latest`. La ruta del binario se centraliza con `WHISPER_BIN` y por defecto apunta a:
+Gastos es un modulo de organizacion financiera personal. La Fase 10.1 implementa modelo de datos, repositorios, servicios de dominio y pruebas. La Fase 10.2 agrega la pantalla de Configuracion para administrar categorias, medios de pago, servicios habituales y los medios permitidos por servicio. La Fase 10.3 agrega el CRUD mensual para registrar gastos concretos por periodo. La Fase 10.4 genera gastos recurrentes. La Fase 10.5 muestra el resumen mensual. La Fase 10.6 integra Gastos con el centro general de Notificaciones. Aun no muestra graficos historicos, no importa movimientos bancarios, no define presupuestos y no envia email, Push, SMS ni WhatsApp.
 
-- `WHISPER_BIN=/usr/local/bin/whisper-cli`
-
-La primera implementacion es CPU-only. No se configura CUDA, ROCm, Metal ni opciones especificas de hardware. La arquitectura deja esa aceleracion para una decision futura, manteniendo por ahora una ejecucion reproducible en Docker Desktop + WSL.
-
-Los modelos Whisper no forman parte de la imagen Docker ni del repositorio Git. Se guardan localmente, fuera de `public/`, en:
-
-- `storage/models/whisper`
-
-La ruta se configura con:
-
-- `WHISPER_MODELS_PATH=/var/www/html/storage/models/whisper`
-- `WHISPER_MODEL_PATH=/var/www/html/storage/models/whisper/ggml-base.bin`
-
-El target `make whisper-model MODEL=base` descarga explicitamente un solo modelo permitido (`tiny`, `base`, `small` o `medium`) si no existe, lo deja en `storage/models/whisper` y verifica su SHA1. Esta descarga requiere Internet, pero no ocurre al iniciar Docker ni al ejecutar Cron.
-
-`WhisperService` centraliza binario, modelo, directorios, extraccion WAV, construccion de argumentos y ejecucion con `proc_open()` usando arrays de argumentos. Los comandos de Whisper no viven en controllers ni aceptan comandos, rutas, nombres fisicos de modelo o argumentos arbitrarios desde el navegador.
-
-La salida elegida es JSON de `whisper-cli` con `--output-json`, porque permite obtener timestamps por segmento. `WhisperTranscriptParser` transforma esa salida en una estructura interna con `start_seconds`, `end_seconds` y `text`, tolerando espacios, UTF-8, espanol, ingles y timestamps con decimales.
-
-La creacion de una transcripcion se hace desde el detalle/editor del video con `POST` autenticado y CSRF a `/api/video/transcriptions.php`. El navegador envia exactamente una fuente permitida: `video_id` para el original o `export_job_id` para una exportacion completada. El navegador solo puede elegir `requested_language` entre `auto`, `es` y `en`; el modelo mostrado es informativo y proviene de `WHISPER_MODEL_PATH`. No se acepta `user_id`, rutas, binarios, modelos fisicos ni argumentos CLI desde HTTP. Si ya existe una transcripcion `pending` o `processing` para la misma fuente, se rechaza un segundo job activo. Las transcripciones `completed` anteriores se conservan y una nueva solicitud crea otra fila.
-
-`TranscriptionSourceResolver` centraliza la resolucion segura de fuentes. Para originales valida ownership contra `video_files.user_id` y exige que el `realpath` quede dentro de `storage/video/uploads`. Para exportaciones valida ownership contra `video_export_jobs.user_id`, exige `status = completed`, archivo existente y `realpath` dentro de `storage/video/exports`. Las exportaciones pendientes, en proceso, fallidas o sin archivo no pueden iniciar una transcripcion. Las transcripciones completadas de una exportacion pueden conservarse aunque luego se elimine el MP4, porque texto y segmentos viven en BD y `export_job_id` puede quedar `NULL` por FK `SET NULL`; no se permite reprocesar si la fuente ya no existe.
-
-`workers/process-video-transcriptions.php` procesa como maximo un job por ejecucion. Antes de reclamar un `pending`, comprueba que no exista ningun job `processing`, para mantener una sola transcripcion simultanea en CPU. El worker marca `pending -> processing`, resuelve la fuente mediante `TranscriptionSourceResolver`, extrae un WAV temporal en `storage/video/temp`, ejecuta `whisper.cpp`, parsea JSON, guarda segmentos y `full_text` en una transaccion, marca `completed` con `progress_percent = 100` y elimina temporales. Si falla FFmpeg, Whisper o la validacion, marca `failed`, conserva el ultimo porcentaje real y elimina temporales sin tocar el video original ni la exportacion fuente.
-
-El progreso parte en `0` para `pending`, pasa a un valor conservador de `1` al reclamar el job y a `10` cuando la extraccion WAV termina. La version actual de `whisper.cpp` se ejecuta con `-np` y no entrega progreso estructurado fiable durante la inferencia, por lo que la interfaz muestra "Procesando..." mientras sigue en `processing` y solo queda en `100` al completar. No se inventan porcentajes por timer.
-
-La interfaz consulta `/api/video/transcriptions.php?video_id=ID` cada 3 segundos solo mientras exista una transcripcion `pending` o `processing`; al quedar todas en `completed` o `failed`, detiene el polling. El detalle/editor muestra historial mas reciente primero, conteo de segmentos, fuente original/exportada, estado y acciones minimas de reintento/eliminacion. El boton `Transcribir` usa handlers delegados y el JS se sirve con version por `filemtime` para evitar que una copia cacheada deje el boton sin respuesta despues de desplegar cambios.
-
-La exportacion de una transcripcion completada usa este flujo:
+El flujo conceptual es:
 
 ```text
-video_transcription_segments
--> TranscriptionExportService
--> TXT / TXT con timestamps / SRT / VTT
--> descarga autenticada
+Category
+-> Expense Service
+<-> Payment Methods
+-> Recurring Rule
+-> Recurring Adjustment
+-> Monthly Expense
 ```
 
-`TranscriptionExportService` carga la transcripcion propia, exige `status = completed`, usa segmentos ordenados como fuente de verdad y genera el contenido dinamicamente en UTF-8. TXT limpio no incluye timestamps; TXT con tiempos usa `[HH:MM:SS]`; SRT usa `HH:MM:SS,mmm`; VTT usa `HH:MM:SS.mmm` con encabezado `WEBVTT`. Si no existen segmentos, TXT puede usar `full_text`, pero SRT/VTT y TXT con tiempos se rechazan para evitar archivos corruptos. Los archivos TXT/SRT/VTT no se guardan en `storage/` ni se conservan permanentemente; se transmiten desde `/video/transcription/download.php?id=ID&format=...` con formato validado por allowlist.
+`ExpenseService` en el modelo de datos representa algo configurable que el usuario suele pagar, como Aguas Andinas, Spotify, WOM, Entel, Vespucio Sur o Dividendo. No es el pago mensual concreto. Puede tener categoria opcional, monto CLP sugerido opcional, notas y estado activo/inactivo. Una recurrencia vive en `expense_recurring_rules`, siempre asociada a un servicio del mismo usuario, y genera `expenses`: no existe un sistema paralelo de gastos.
 
-La accion "Copiar texto" obtiene la version TXT limpia mediante el mismo endpoint autenticado y la copia con Clipboard API desde JavaScript nativo. No modifica la transcripcion, no crea archivos y no implementa visor sincronizado, busqueda, edicion de subtitulos ni seguimiento del video.
+La navegacion autenticada muestra una unica entrada principal `Gastos`, sin submenu. La ruta real actual es:
 
-`workers/check-transcription-environment.php` valida desde CLI que `whisper.cpp`, el modelo configurado, FFmpeg, FFprobe, `storage/models/whisper` y `storage/video/temp` esten disponibles. Si el binario existe pero el modelo aun no fue instalado, informa `Model: NOT INSTALLED` y termina con codigo distinto de 0.
+```text
+/index.php?section=expenses
+```
+
+Esa entrada abre el mes actual. La pantalla usa navegacion interna:
+
+```text
+Gastos
+-> Mes actual
+-> Configuracion
+```
+
+El mes se selecciona con `month=YYYY-MM`, por ejemplo:
+
+```text
+/index.php?section=expenses&month=2026-08
+```
+
+Si el mes es invalido, se vuelve al mes local actual usando `America/Santiago`. La configuracion conserva las rutas equivalentes de 10.2 mediante tabs internas:
+
+```text
+Configuracion
+-> Categorias
+-> Medios de pago
+-> Servicios
+```
+
+Las operaciones de configuracion usan la API interna autenticada:
+
+```text
+/api/expenses/configuration.php
+```
+
+`GET` devuelve solo la configuracion del usuario autenticado. Las escrituras usan `POST` con CSRF y acciones controladas para crear, actualizar, desactivar y reactivar categorias, medios de pago y servicios. El navegador nunca envia ni controla `user_id`.
+
+Desde la pestana Servicios se configura la recurrencia del servicio. El flujo es:
+
+```text
+Expense Service
+-> Regla recurrente
+-> Ajuste mensual opcional
+-> Worker
+-> Expense mensual pendiente
+```
+
+La version inicial soporta `monthly` con `interval_value >= 1`, lo que permite cada 1, 2 o mas meses sin agregar frecuencias nuevas. `day_of_month` define el vencimiento local del gasto generado. Si el mes no tiene ese dia, `ExpenseDateHelper::resolveDayOfMonth()` usa el ultimo dia valido: 31 de febrero pasa a 28 o 29, y 31 de abril pasa a 30.
+
+Las operaciones mensuales usan la API interna autenticada:
+
+```text
+/api/expenses/expenses.php
+```
+
+Las escrituras son `POST` con CSRF. Las acciones permitidas son crear, actualizar, marcar pagado, volver a pendiente, cancelar y reactivar. No hay eliminacion fisica normal en 10.3 para conservar historial financiero.
+
+`Expense` representa el gasto real de un periodo mensual. Puede venir de un `expense_services.id` o ser ad-hoc con `service_id NULL`, como Reparacion notebook. Conserva `description` como nombre historico visible, `amount_clp` como entero CLP nullable y `category_id` del momento de creacion cuando corresponde, para que cambiar luego la categoria del servicio no destruya el significado historico de gastos ya creados. Si el gasto nace desde un servicio, la UI sugiere descripcion, categoria, monto habitual, medios permitidos y medio predeterminado, pero el registro mensual guarda su propio snapshot editable.
+
+`amount_clp = NULL` significa monto pendiente, no cero. Esto permite generar gastos recurrentes variables como agua, gas, electricidad o autopistas antes de conocer la boleta. Los KPIs monetarios excluyen esos montos y muestran la cantidad pendiente de completar.
+
+Los medios de pago se modelan como identificadores conceptuales del usuario: Visa Santander, Cuenta Santander, PAT Santander, Mercado Pago, WebPay, efectivo o transferencia. El modulo no guarda numero completo de tarjeta, CVV, PIN, claves ni numeros bancarios sensibles. `ExpensePaymentMethodService` rechaza campos sensibles explicitos y textos con senales basicas de datos secretos.
+
+La prioridad de defaults al generar un gasto recurrente es:
+
+- monto de la regla;
+- monto del servicio;
+- `NULL` como monto pendiente.
+
+Para categoria se usa categoria de la regla, luego categoria actual del servicio y finalmente `NULL`. La categoria queda como snapshot del expense y cambios posteriores no reescriben historico. Para medio de pago se usa el medio de la regla solo si esta activo; si no, se intenta el default activo del servicio; si no hay, queda `NULL`.
+
+Los ajustes mensuales de recurrencia viven en `expense_recurring_adjustments` y permiten flexibilidad sin crear otro sistema de pagos. Para un servicio recurrente se puede saltar un periodo puntual, por ejemplo congelar o suspender un cobro, o generar ese periodo con cambios especificos: monto especial, descuento, monto `0`, fecha limite aplazada a otro mes, categoria, medio de pago, descripcion y notas. El ajuste se aplica solo si el expense de ese periodo aun no fue generado; no modifica gastos historicos ya existentes.
+
+Para dejar de pagar un servicio hacia adelante se debe desactivar la regla recurrente o definir `ends_on`; para meses puntuales se usa un ajuste `skip`. Si el usuario cambia de proveedor, el modelo esperado es desactivar o finalizar el servicio/regla anterior y crear un servicio nuevo para el reemplazo, preservando ambos historiales.
+
+Un servicio configurable puede tener varios medios de pago permitidos mediante `expense_service_payment_methods`:
+
+```text
+Expense Service
+<-> Payment Methods
+   -> is_default opcional
+```
+
+Editar un servicio sincroniza la relacion completa en una transaccion: elimina relaciones quitadas, conserva las existentes y agrega las nuevas. Solo puede existir un medio predeterminado por servicio y debe estar dentro de los medios seleccionados. Si se quita el medio que era predeterminado y no se elige otro, el servicio queda sin default. El gasto mensual registra a lo mas un `payment_method_id` como medio realmente usado ese mes. Al elegir un servicio, la UI muestra primero sus medios permitidos y preselecciona el default cuando existe, pero puede usarse otro medio activo propio como excepcion mensual. No se implementan pagos divididos.
+
+La UI de Servicios permite seleccionar 0..N medios mediante checkboxes/chips y un selector de predeterminado. Los medios desactivados no se ofrecen para nuevas asociaciones; si un servicio ya los tenia asociados, pueden mostrarse como inactivos para no borrarlos silenciosamente. Las categorias desactivadas no se ofrecen normalmente para nuevas asignaciones, pero un servicio existente puede conservar su categoria actual.
+
+Las fechas de Gastos son fechas comerciales locales:
+
+- `period_month` es `DATE` y siempre usa el primer dia del mes, por ejemplo `2026-08-01` para agosto 2026.
+- `due_on` es la fecha limite local/comercial.
+- `paid_on` es la fecha real local/comercial de pago.
+
+Estos campos no se convierten a UTC porque no son instantes horarios. El calculo de vencido usa "hoy" en `America/Santiago`.
+
+`workers/process-recurring-expenses.php` corre desde Cron una vez al dia y tambien puede ejecutarse manualmente. Genera el gasto del mes al comenzar el mes, pero si el equipo estuvo apagado hace catch-up cuando vuelva a correr. Al crear una regla a mitad de mes desde la UI, la API ejecuta una pasada acotada para esa regla y crea el gasto del mes actual si corresponde. Para evitar historia masiva, una regla nueva con `starts_on` antiguo inicializa `next_generation_on` en el mes local actual; el worker solo hace catch-up desde ese puntero de la regla.
+
+La idempotencia no depende solo de un `SELECT` previo: `expenses.recurring_rule_id` apunta a `expense_recurring_rules.id` y existe `UNIQUE (recurring_rule_id, period_month)`. Por eso ejecutar el worker varias veces puede saltar existentes, pero no duplica Spotify septiembre.
+
+Los gastos recurrentes siempre nacen como `pending` y `paid_on = NULL`, incluso si el servicio usa PAT. Mi Central no asume que el cobro ocurrio. Editar un expense generado no modifica la regla. Editar la regla no modifica expenses historicos ni el expense del mes si ya fue generado; aplica a generaciones futuras.
+
+El estado persistido de un gasto mensual usa solo estados base: `pending`, `paid` y `cancelled`. `overdue` no se persiste; se deriva cuando `status = pending` y `due_on < hoy` en `America/Santiago`. Esto evita estados que puedan quedar desactualizados.
+
+El dashboard mensual de Gastos no persiste totales. Usa el flujo:
+
+```text
+expenses
+-> ExpenseMonthlySummaryService
+-> Monthly Expense Dashboard
+```
+
+`ExpenseMonthlySummaryService` recibe `user_id` y `period_month`, y calcula con consultas preparadas acotadas al usuario:
+
+- total conocido de expenses no cancelados con `amount_clp IS NOT NULL`;
+- pagado conocido;
+- pendiente conocido;
+- vencido conocido;
+- cantidad de expenses no cancelados con monto pendiente;
+- porcentaje pagado sobre montos conocidos;
+- breakdown derivado por categoria;
+- breakdown derivado por medio de pago real del expense;
+- proximos vencimientos pendientes;
+- vencidos pendientes.
+
+`amount_clp = NULL` nunca se presenta como `$0`: se muestra como `Monto pendiente` y queda fuera de sumas monetarias. Esos expenses si cuentan como compromisos del mes y aparecen en categoria, medio de pago, proximos vencimientos o vencidos cuando corresponda.
+
+Los breakdowns por categoria y por medio de pago son derivados para el mes seleccionado. Las categorias o medios inactivos siguen apareciendo si existen gastos historicos asociados. Los expenses sin categoria aparecen como `Sin categoria`; los expenses sin payment method aparecen como `Sin medio definido`.
+
+Los KPIs principales siempre representan todo el mes seleccionado. Los filtros de lista por estado, categoria, servicio, medio de pago y busqueda solo afectan el listado y el bloque `Resultados`; no reemplazan el resumen mensual superior.
+
+El historial de Gastos tampoco persiste agregados. Usa el flujo:
+
+```text
+Expenses
+-> ExpenseHistoryService
+-> Historical Analysis
+```
+
+`ExpenseHistoryService` recibe `user_id`, un rango predefinido y filtros opcionales por categoria, servicio o medio de pago. Los rangos soportados son ultimos 3 meses, ultimos 6 meses, ultimos 12 meses, ano actual y ano anterior. Ultimos 12 meses es una ventana movil; ano actual usa enero hasta el mes local actual, sin meses futuros; ano anterior usa enero-diciembre completo.
+
+El analisis se deriva exclusivamente de `expenses`, no de montos default de servicios. Los expenses recurrentes y manuales se analizan igual porque ambos son gastos mensuales concretos. Los cancelados quedan fuera de totales, graficos y breakdowns. `amount_clp = NULL` significa monto desconocido: no suma como cero, pero incrementa indicadores de datos parciales por mes y por periodo.
+
+La serie mensual incluye todos los meses del rango aunque no tengan gastos. Esto permite que el promedio mensual divida por el rango completo seleccionado y que los graficos no oculten meses en cero. La comparacion con el mes anterior se calcula dinamicamente sobre montos conocidos; si el mes anterior es cero no se muestra porcentaje infinito, solo una comparacion absoluta o estado sin variacion.
+
+Los breakdowns historicos se calculan con consultas agregadas acotadas por usuario:
+
+- total registrado conocido y total pagado;
+- promedio mensual;
+- mes con mayor y menor gasto conocido;
+- evolucion mensual;
+- gastos por categoria, incluyendo `Sin categoria` y categorias inactivas con historial;
+- servicios con mayor gasto, solo para expenses con `service_id`;
+- uso por medio de pago real del expense, incluyendo `Sin medio definido` y medios inactivos con historial;
+- pagado, pendiente, vencido y montos pendientes segun el estado actual del expense.
+
+Los filtros historicos se validan contra ownership en backend. Si el navegador envia una categoria, servicio o medio de otro usuario, ese filtro no se aplica ni revela datos ajenos. La URL conserva el estado del analisis con parametros como `tab=history&range=6m&category_id=ID`.
+
+La integracion con Notificaciones reutiliza exclusivamente la tabla `notifications` y el centro general:
+
+```text
+Expenses
+-> ExpenseNotificationService / workers/process-expense-notifications.php
+-> notifications
+-> Notification Center
+```
+
+`ExpenseNotificationService` usa `America/Santiago` para calcular hoy, manana, fechas vencidas y la semana funcional. Los timestamps tecnicos de la notificacion siguen guardandose como UTC mediante la politica existente.
+
+Las reglas generadas son:
+
+- `expense_due_soon`: gastos `pending` que vencen manana;
+- `expense_due_today`: gastos `pending` que vencen hoy;
+- `expense_overdue`: gastos `pending` con `due_on < hoy`;
+- `expense_missing_amount`: gastos `pending`, con `amount_clp NULL`, que vencen en 3 dias;
+- `expense_weekly_summary`: resumen compacto los lunes para gastos `pending` que vencen entre hoy y hoy+6.
+
+No se generan avisos para gastos `paid`, `cancelled` ni gastos sin `due_on`. Crear o editar un gasto no dispara notificaciones inmediatas; el worker solo crea avisos cuando aparece una situacion temporal relevante. Si un gasto se paga despues de que exista una notificacion, la notificacion queda como historial y al abrirla se navega al expense actual.
+
+La idempotencia usa `notifications.dedupe_key`, sin contaminar `expenses` con flags. Las claves son:
+
+- `expense_due_tomorrow:<expense_id>:<date>`;
+- `expense_due_today:<expense_id>:<date>`;
+- `expense_overdue:<expense_id>:<due_on>`;
+- `expense_missing_amount:<expense_id>:<period>`;
+- `expense_weekly_summary:<user_id>:YYYY-Www`.
+
+Las notificaciones puntuales guardan `source_module = expenses`, `entity_type = expense` y `entity_id = expenses.id`. `NotificationService` resuelve esas entidades a `/index.php?section=expenses&month=YYYY-MM&expense=ID#expense-ID`, sin guardar URLs arbitrarias desde el frontend. El resumen semanal no apunta a una entidad individual, pero aparece mezclado cronologicamente con recordatorios, organizacion, proyectos y video.
+
+Las cuotas se guardan como datos estructurados con `installment_current` e `installment_total`, no como texto `3/12`. Ambos son `NULL` cuando no hay cuotas; si hay cuotas, ambos deben existir y cumplir `current >= 1`, `total >= 1` y `current <= total`.
+
+El backend vive en `modules/Expenses/` y mantiene el mismo estilo modular del resto de Mi Central:
+
+```text
+servicio de dominio
+-> repositorio del modulo
+-> PDO / MariaDB
+```
+
+El flujo mensual de 10.3 es:
+
+```text
+Gastos / Mes actual
+-> ExpenseService
+-> ExpenseRepository
+-> expenses
+```
+
+El flujo recurrente de 10.4 es:
+
+```text
+ExpenseService
+-> ExpenseRecurringRuleService
+-> RecurringExpenseWorker
+-> ExpenseRepository / expenses
+```
+
+`ExpenseRepository` lista gastos mensuales con `LEFT JOIN` a servicios, categorias y medios de pago para evitar N+1 y conservar nombres visibles aunque esas entidades hayan sido desactivadas despues.
+
+Las entidades personales de Gastos pertenecen siempre al usuario autenticado: categorias, medios de pago, servicios configurables y gastos mensuales. La capa de servicio valida ownership antes de asociar `category_id`, `service_id` o `payment_method_id`; el navegador no debe enviar ni controlar `user_id`.
 
 ## Docker Compose
 
@@ -579,6 +1169,8 @@ El entorno previsto incluye:
 - MariaDB.
 - FFmpeg disponible para procesos PHP/CLI.
 - Cron para workers programados.
+
+`compose.yaml` conserva el flujo de desarrollo local con bind mount del repositorio. `compose.prod.yaml` queda preparado para Oracle Cloud ARM64 sin bind mount del repo, con `restart: unless-stopped`, healthchecks para `web`, `db` y `worker`, y volumenes persistentes separados para MariaDB, logs/cache/temp global, uploads, jobs, exports y temporales de video. HTTPS, dominio real, proxy inverso y despliegue GitHub quedan fuera de la fase 11.2.
 
 ## Dependencias
 

@@ -10,7 +10,12 @@ use RuntimeException;
 final class AuthService
 {
     private const MAX_FAILED_ATTEMPTS = 5;
+    private const MAX_REGISTRATION_ATTEMPTS = 10;
     private const LOCK_SECONDS = 900;
+    private const MIN_PASSWORD_LENGTH = 12;
+    private const LOGIN_SUCCESS = 'success';
+    public const LOGIN_INVALID = 'invalid';
+    public const LOGIN_INACTIVE = 'inactive';
 
     public function __construct(private readonly PDO $pdo)
     {
@@ -42,7 +47,7 @@ final class AuthService
             throw new RuntimeException('Invalid username.');
         }
 
-        if ($password === '' || strlen($password) < 12) {
+        if (!$this->isValidPassword($password)) {
             throw new RuntimeException('Invalid password.');
         }
 
@@ -57,7 +62,8 @@ final class AuthService
         }
 
         $statement = $this->pdo->prepare(
-            'INSERT INTO users (username, password_hash) VALUES (:username, :password_hash)'
+            "INSERT INTO users (username, password_hash, approval_status, is_active, approved_at)
+             VALUES (:username, :password_hash, 'approved', 1, NOW())"
         );
         $statement->execute([
             'username' => $username,
@@ -69,22 +75,30 @@ final class AuthService
 
     public function attemptLogin(string $username, string $password, string $ipAddress): bool
     {
+        return $this->attemptLoginWithStatus($username, $password, $ipAddress) === self::LOGIN_SUCCESS;
+    }
+
+    public function attemptLoginWithStatus(string $username, string $password, string $ipAddress): string
+    {
         $username = self::normalizeUsername($username);
         $attemptUsername = $this->attemptUsername($username);
 
         if ($this->isTemporarilyBlocked($attemptUsername, $ipAddress)) {
-            return false;
+            return self::LOGIN_INVALID;
         }
 
         $user = $this->findUser($username);
 
         if (
             $user === null
-            || (int) $user['is_active'] !== 1
             || !password_verify($password, (string) $user['password_hash'])
         ) {
             $this->recordFailedAttempt($attemptUsername, $ipAddress);
-            return false;
+            return self::LOGIN_INVALID;
+        }
+
+        if ((int) $user['is_active'] !== 1) {
+            return self::LOGIN_INACTIVE;
         }
 
         if (password_needs_rehash((string) $user['password_hash'], PASSWORD_ARGON2ID)) {
@@ -97,7 +111,7 @@ final class AuthService
         Session::regenerate();
         Session::authenticate((int) $user['id'], (string) $user['username']);
 
-        return true;
+        return self::LOGIN_SUCCESS;
     }
 
     public static function logout(): void
@@ -122,6 +136,34 @@ final class AuthService
         return (int) $statement->fetchColumn() >= self::MAX_FAILED_ATTEMPTS;
     }
 
+    public function isRegistrationTemporarilyBlocked(string $ipAddress): bool
+    {
+        $since = date('Y-m-d H:i:s', time() - self::LOCK_SECONDS);
+
+        $statement = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM login_attempts
+             WHERE username = :username AND ip_address = :ip_address AND attempted_at >= :since'
+        );
+        $statement->execute([
+            'username' => '_register',
+            'ip_address' => substr($ipAddress, 0, 45),
+            'since' => $since,
+        ]);
+
+        return (int) $statement->fetchColumn() >= self::MAX_REGISTRATION_ATTEMPTS;
+    }
+
+    public function recordRegistrationAttempt(string $ipAddress): void
+    {
+        $statement = $this->pdo->prepare(
+            'INSERT INTO login_attempts (username, ip_address) VALUES (:username, :ip_address)'
+        );
+        $statement->execute([
+            'username' => '_register',
+            'ip_address' => substr($ipAddress, 0, 45),
+        ]);
+    }
+
     public function recordFailedAttempt(string $username, string $ipAddress): void
     {
         $statement = $this->pdo->prepare(
@@ -131,6 +173,35 @@ final class AuthService
             'username' => $this->attemptUsername($username),
             'ip_address' => substr($ipAddress, 0, 45),
         ]);
+    }
+
+    public function isSessionUserAllowed(int $userId): bool
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT 1
+             FROM users
+             WHERE id = :id
+               AND is_active = 1
+             LIMIT 1"
+        );
+        $statement->execute(['id' => $userId]);
+
+        return $statement->fetchColumn() !== false;
+    }
+
+    public function isAdmin(int $userId): bool
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT 1
+             FROM users
+             WHERE id = :id
+               AND is_active = 1
+               AND is_admin = 1
+             LIMIT 1"
+        );
+        $statement->execute(['id' => $userId]);
+
+        return $statement->fetchColumn() !== false;
     }
 
     private function findUser(string $username): ?array
@@ -175,6 +246,11 @@ final class AuthService
             'password_hash' => $hash,
             'id' => $userId,
         ]);
+    }
+
+    private function isValidPassword(string $password): bool
+    {
+        return $password !== '' && strlen($password) >= self::MIN_PASSWORD_LENGTH;
     }
 
     private function attemptUsername(string $username): string

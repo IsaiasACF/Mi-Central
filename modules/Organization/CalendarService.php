@@ -14,6 +14,8 @@ final class CalendarService
     public function __construct(
         private readonly CalendarRepository $calendar,
         private readonly string $timezone = DateTimeHelper::DEFAULT_TIMEZONE,
+        private readonly ?LabelService $labels = null,
+        private readonly ?DateTimeImmutable $now = null,
     )
     {
     }
@@ -37,13 +39,18 @@ final class CalendarService
             $title = $this->monthName((int) $rangeStart->format('n')) . ' ' . $rangeStart->format('Y');
         }
 
-        $days = $this->days($rangeStart, $rangeEnd);
+        $today = ($this->now ?? DateTimeHelper::nowLocal($this->timezone))
+            ->setTimezone($timezone)
+            ->format('Y-m-d');
+        $selected = $anchor->format('Y-m-d');
+        $days = $this->days($rangeStart, $rangeEnd, $today, $selected);
         $itemsByDate = $this->itemsByDate($userId, $rangeStart, $rangeEnd, $timezone);
 
         return [
             'view' => $view,
             'title' => $title,
             'anchor_date' => $anchor->format('Y-m-d'),
+            'today_date' => $today,
             'previous_date' => ($view === 'week' ? $rangeStart->modify('-7 days') : $rangeStart->modify('-1 month'))->format('Y-m-d'),
             'next_date' => ($view === 'week' ? $rangeStart->modify('+7 days') : $rangeStart->modify('+1 month'))->format('Y-m-d'),
             'range_start' => $rangeStart->format('Y-m-d'),
@@ -67,9 +74,9 @@ final class CalendarService
     }
 
     /**
-     * @return array<int, array{date: string, day: string, weekday: string, in_current_month: bool}>
+     * @return array<int, array{date: string, day: string, weekday: string, in_current_month: bool, is_today: bool, is_selected: bool}>
      */
-    private function days(DateTimeImmutable $rangeStart, DateTimeImmutable $rangeEnd): array
+    private function days(DateTimeImmutable $rangeStart, DateTimeImmutable $rangeEnd, string $today, string $selected): array
     {
         $periodStart = $rangeStart;
         $periodEnd = $rangeEnd;
@@ -89,6 +96,8 @@ final class CalendarService
                 'day' => $day->format('j'),
                 'weekday' => $this->weekdayName((int) $day->format('N')),
                 'in_current_month' => $day->format('m') === $currentMonth,
+                'is_today' => $day->format('Y-m-d') === $today,
+                'is_selected' => $day->format('Y-m-d') === $selected,
             ];
         }
 
@@ -111,6 +120,12 @@ final class CalendarService
             $rangeStart->format('Y-m-d'),
             $rangeEnd->modify('-1 day')->format('Y-m-d'),
         );
+
+        if ($this->labels !== null) {
+            $tasks = $this->labels->attachLabelsToEntities($userId, 'task', $tasks);
+            $projects = $this->labels->attachLabelsToEntities($userId, 'project', $projects);
+        }
+
         $itemsByDate = [];
 
         foreach ($tasks as $task) {
@@ -155,8 +170,12 @@ final class CalendarService
             $date = $day->format('Y-m-d');
             $itemsByDate[$date][] = [
                 'type' => 'task-scheduled',
+                'entity_type' => 'task',
+                'entity_id' => (int) $task['id'],
                 'title' => (string) $task['title'],
                 'label' => $this->taskTimeLabel($startsAt, $endsAt, $date) . ' ' . (string) $task['title'],
+                'label_summary' => $this->labelSummary($task['labels'] ?? []),
+                'indicator_color' => $this->indicatorColor($task['labels'] ?? [], '#2DD4BF'),
                 'sort' => $startsAt->format('H:i'),
                 'url' => $this->taskUrl($task),
             ];
@@ -178,8 +197,12 @@ final class CalendarService
         $date = $dueAt->format('Y-m-d');
         $itemsByDate[$date][] = [
             'type' => 'task-due',
+            'entity_type' => 'task',
+            'entity_id' => (int) $task['id'],
             'title' => (string) $task['title'],
             'label' => $dueAt->format('H:i') . ' Vence: ' . (string) $task['title'],
+            'label_summary' => $this->labelSummary($task['labels'] ?? []),
+            'indicator_color' => $this->indicatorColor($task['labels'] ?? [], '#FB7185'),
             'sort' => $dueAt->format('H:i') . 'z',
             'url' => $this->taskUrl($task),
         ];
@@ -202,8 +225,12 @@ final class CalendarService
             $date = $day->format('Y-m-d');
             $itemsByDate[$date][] = [
                 'type' => 'project',
+                'entity_type' => 'project',
+                'entity_id' => (int) $project['id'],
                 'title' => (string) $project['title'],
                 'label' => $label,
+                'label_summary' => $this->labelSummary($project['labels'] ?? []),
+                'indicator_color' => $this->indicatorColor($project['labels'] ?? [], '#7AB7FF'),
                 'sort' => '99:project',
                 'url' => '/index.php?section=organization&tab=projects&project=' . rawurlencode((string) $project['id']),
             ];
@@ -258,6 +285,47 @@ final class CalendarService
             11 => 'Noviembre',
             12 => 'Diciembre',
         ][$month] ?? '';
+    }
+
+    /**
+     * @param mixed $labels
+     */
+    private function labelSummary(mixed $labels): string
+    {
+        if (!is_array($labels) || $labels === []) {
+            return '';
+        }
+
+        $names = array_values(array_filter(array_map(
+            static fn (mixed $label): string => is_array($label) ? (string) ($label['name'] ?? '') : '',
+            $labels,
+        )));
+
+        if ($names === []) {
+            return '';
+        }
+
+        $visible = array_slice($names, 0, 2);
+        $remaining = count($names) - count($visible);
+
+        return implode(' ', $visible) . ($remaining > 0 ? ' +' . $remaining : '');
+    }
+
+    private function indicatorColor(mixed $labels, string $fallback): string
+    {
+        if (!is_array($labels)) {
+            return $fallback;
+        }
+
+        foreach ($labels as $label) {
+            $color = is_array($label) ? strtoupper((string) ($label['color'] ?? '')) : '';
+
+            if (preg_match('/\A#[0-9A-F]{6}\z/', $color) === 1) {
+                return $color;
+            }
+        }
+
+        return $fallback;
     }
 
     private function weekdayName(int $weekday): string

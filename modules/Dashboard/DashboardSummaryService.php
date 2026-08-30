@@ -11,6 +11,7 @@ use Modules\Friends\FriendPresenceService;
 use Modules\Notifications\NotificationService;
 use Modules\Organization\ReminderService;
 use Modules\Organization\TaskService;
+use Modules\Video\VideoDashboardSummaryService;
 
 final class DashboardSummaryService
 {
@@ -22,6 +23,7 @@ final class DashboardSummaryService
         private readonly ?NotificationService $notificationService = null,
         private readonly ?FriendPresenceService $friendPresenceService = null,
         private readonly ?CoincidenceService $coincidenceService = null,
+        private readonly ?VideoDashboardSummaryService $videoDashboardSummaryService = null,
     )
     {
     }
@@ -61,7 +63,7 @@ final class DashboardSummaryService
                 ),
                 'friends' => $this->section(
                     key: 'friends',
-                    title: 'Amigos en la U',
+                    title: 'Horarios',
                     eyebrow: 'Universidad',
                     description: 'Resumen segun horarios ingresados manualmente.',
                     emptyState: 'Aun no hay amigos activos con horario.',
@@ -83,20 +85,12 @@ final class DashboardSummaryService
                     key: 'discounts',
                     title: 'Descuentos',
                     eyebrow: 'Beneficios',
-                    description: 'Placeholder para promociones compatibles.',
+                    description: 'Promociones compatibles con tus beneficios.',
                     emptyState: 'No hay descuentos disponibles.',
                     modifier: 'dashboard-card--discounts',
-                    link: ['label' => 'Ver mas', 'url' => '/index.php?section=discounts-for-me'],
+                    link: ['label' => 'Ver mas', 'url' => '/index.php?section=discounts'],
                 ),
-                'video' => $this->section(
-                    key: 'video',
-                    title: 'Video',
-                    eyebrow: 'Editor',
-                    description: 'Acceso visual al futuro editor de video.',
-                    emptyState: 'No hay procesamientos recientes.',
-                    modifier: 'dashboard-card--video',
-                    link: ['label' => 'Ver mas', 'url' => '/index.php?section=video-editor'],
-                ),
+                'video' => $this->videoSection(),
                 'inbox' => $this->section(
                     key: 'inbox',
                     title: 'Bandeja rapida',
@@ -144,6 +138,28 @@ final class DashboardSummaryService
             'items' => $items,
             'count' => $count ?? count($items),
         ];
+    }
+
+    private function videoSection(): array
+    {
+        $videoSummary = $this->videoDashboardSummaryService !== null && $this->userId !== null
+            ? $this->videoDashboardSummaryService->summary($this->userId)
+            : [
+                'items' => [],
+                'empty_state' => 'Aun no hay actividad de video.',
+                'link' => ['label' => 'Abrir editor', 'url' => '/index.php?section=video'],
+            ];
+
+        return $this->section(
+            key: 'video',
+            title: 'Video',
+            eyebrow: 'Editor',
+            description: 'Edita y exporta tus videos.',
+            emptyState: (string) ($videoSummary['empty_state'] ?? 'Aun no hay actividad de video.'),
+            modifier: 'dashboard-card--video',
+            link: is_array($videoSummary['link'] ?? null) ? $videoSummary['link'] : ['label' => 'Abrir editor', 'url' => '/index.php?section=video'],
+            items: is_array($videoSummary['items'] ?? null) ? $videoSummary['items'] : [],
+        );
     }
 
     /**

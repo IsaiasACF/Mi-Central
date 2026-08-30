@@ -6,6 +6,8 @@ use App\Http\Csrf;
 use App\Http\JsonResponse;
 use App\Http\SecurityHeaders;
 use App\Http\Session;
+use Modules\Organization\LabelRepository;
+use Modules\Organization\LabelService;
 use Modules\Organization\NoteRepository;
 use Modules\Organization\NoteService;
 use Modules\Organization\TaskValidationException;
@@ -22,7 +24,9 @@ if (!Session::isAuthenticated()) {
 $user = Session::user();
 $userId = (int) ($user['user_id'] ?? 0);
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$service = new NoteService(new NoteRepository(Connection::get()));
+$pdo = Connection::get();
+$labelService = new LabelService(new LabelRepository($pdo));
+$service = new NoteService(new NoteRepository($pdo), $labelService);
 
 try {
     if ($method === 'GET') {
@@ -52,8 +56,24 @@ try {
     }
 
     if ($method === 'POST') {
-        if (noteIdFromRequest() !== null) {
-            JsonResponse::send(['ok' => false, 'error' => 'Accion invalida.'], 400);
+        $noteId = noteIdFromRequest();
+
+        if ($noteId !== null) {
+            $action = noteActionFromRequest();
+
+            if (!in_array($action, ['complete', 'reopen'], true)) {
+                JsonResponse::send(['ok' => false, 'error' => 'Accion invalida.'], 400);
+            }
+
+            $note = $action === 'complete'
+                ? $service->complete($userId, $noteId)
+                : $service->reopen($userId, $noteId);
+
+            if ($note === null) {
+                JsonResponse::send(['ok' => false, 'error' => 'Nota no encontrada.'], 404);
+            }
+
+            JsonResponse::send(['ok' => true, 'data' => $note]);
         }
 
         JsonResponse::send(['ok' => true, 'data' => $service->create($userId, $payload)], 201);
@@ -94,6 +114,11 @@ function noteIdFromRequest(): ?int
     }
 
     return (int) $_GET['id'];
+}
+
+function noteActionFromRequest(): string
+{
+    return is_string($_GET['action'] ?? null) ? (string) $_GET['action'] : '';
 }
 
 /**

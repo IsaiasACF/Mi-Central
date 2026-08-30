@@ -226,7 +226,7 @@ try {
 
     $friendsPage = friends_management_request('http://127.0.0.1/index.php?section=friends&tab=friends', 'GET', null, $cookieFile);
     friends_management_assert($friendsPage['status'] === 200, 'Friends page did not load.');
-    friends_management_assert(str_contains($friendsPage['body'], 'data-friend-form') && str_contains($friendsPage['body'], 'Amigos en la U'), 'Friends UI was not rendered.');
+    friends_management_assert(str_contains($friendsPage['body'], 'data-friend-form') && str_contains($friendsPage['body'], 'Horarios'), 'Friends UI was not rendered.');
     friends_management_assert(!str_contains($friendsPage['body'], $scriptName), 'Friend content was rendered without escaping.');
     friends_management_assert(str_contains($friendsPage['body'], '&lt;script&gt;alert(1)&lt;/script&gt;'), 'Escaped friend content was not shown.');
     foreach (['friends-now', 'friends-today', 'friends-week', 'friends-coincidences', 'friends-people', 'friends-schedules'] as $oldSection) {

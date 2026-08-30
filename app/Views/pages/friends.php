@@ -308,7 +308,7 @@ unset($dayEntries);
     <div class="tasks-heading">
         <div>
             <p class="eyebrow">Fase 4</p>
-            <h1 id="page-title">Amigos en la U</h1>
+            <h1 id="page-title">Horarios</h1>
             <p class="muted">Gestiona amigos y horarios academicos semanales ingresados manualmente.</p>
         </div>
         <?php if ($activeTab === 'friends'): ?>
@@ -321,7 +321,7 @@ unset($dayEntries);
         <?php endif; ?>
     </div>
 
-    <nav class="organization-tabs" aria-label="Navegacion interna de Amigos en la U">
+    <nav class="organization-tabs" aria-label="Navegacion interna de Horarios">
         <a class="organization-tab<?= $activeTab === 'now' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('now')) ?>" <?= $activeTab === 'now' ? 'aria-current="page"' : '' ?>>Ahora</a>
         <a class="organization-tab<?= $activeTab === 'today' ? ' is-active' : '' ?>" href="<?= View::escape($tabUrl('today')) ?>" <?= $activeTab === 'today' ? 'aria-current="page"' : '' ?>>Hoy</a>
         <a class="organization-tab<?= $activeTab === 'week' ? ' is-active' : '' ?>" href="<?= View::escape($weekUrl()) ?>" <?= $activeTab === 'week' ? 'aria-current="page"' : '' ?>>Semana</a>

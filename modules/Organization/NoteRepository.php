@@ -17,8 +17,8 @@ final class NoteRepository
     public function create(int $userId, array $data): int
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO organization_notes (user_id, space_id, category_id, title, content)
-             VALUES (:user_id, :space_id, :category_id, :title, :content)'
+            'INSERT INTO organization_notes (user_id, space_id, category_id, title, content, status, completed_at)
+             VALUES (:user_id, :space_id, :category_id, :title, :content, :status, :completed_at)'
         );
         $statement->execute([
             'user_id' => $userId,
@@ -26,6 +26,8 @@ final class NoteRepository
             'category_id' => null,
             'title' => $data['title'],
             'content' => $data['content'],
+            'status' => $data['status'],
+            'completed_at' => $data['completed_at'],
         ]);
 
         return (int) $this->pdo->lastInsertId();
@@ -37,7 +39,7 @@ final class NoteRepository
     public function findByIdForUser(int $userId, int $noteId): ?array
     {
         $statement = $this->pdo->prepare(
-            'SELECT id, user_id, space_id, category_id, title, content, created_at, updated_at
+            'SELECT id, user_id, space_id, category_id, title, content, status, completed_at, created_at, updated_at
              FROM organization_notes
              WHERE id = :id AND user_id = :user_id
              LIMIT 1'
@@ -70,11 +72,27 @@ final class NoteRepository
             $where[] = 'space_id IS NULL';
         }
 
+        if (isset($filters['label_id'])) {
+            $where[] = 'EXISTS (
+                SELECT 1
+                FROM organization_note_labels note_labels
+                WHERE note_labels.note_id = organization_notes.id
+                  AND note_labels.user_id = organization_notes.user_id
+                  AND note_labels.label_id = :label_id
+            )';
+            $params['label_id'] = $filters['label_id'];
+        }
+
+        if (isset($filters['status'])) {
+            $where[] = 'status = :status';
+            $params['status'] = $filters['status'];
+        }
+
         $statement = $this->pdo->prepare(
-            'SELECT id, user_id, space_id, category_id, title, content, created_at, updated_at
+            'SELECT id, user_id, space_id, category_id, title, content, status, completed_at, created_at, updated_at
              FROM organization_notes
              WHERE ' . implode(' AND ', $where) . '
-             ORDER BY updated_at DESC, created_at DESC, id DESC'
+             ORDER BY status ASC, updated_at DESC, created_at DESC, id DESC'
         );
         $statement->execute($params);
 
@@ -96,7 +114,7 @@ final class NoteRepository
             'user_id' => $userId,
         ];
 
-        foreach (['space_id', 'title', 'content'] as $field) {
+        foreach (['space_id', 'title', 'content', 'status', 'completed_at'] as $field) {
             if (!array_key_exists($field, $data)) {
                 continue;
             }

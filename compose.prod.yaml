@@ -1,0 +1,148 @@
+name: mi-central-prod
+
+services:
+  web:
+    image: mi-central-web:prod
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      APP_NAME: ${APP_NAME:-Mi Central}
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:-http://localhost}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santiago}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-mi_central}
+      DB_USERNAME: ${DB_USERNAME:-mi_central}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      SESSION_NAME: ${SESSION_NAME:-mi_central_session}
+      SESSION_SECURE: ${SESSION_SECURE:-false}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      FFPROBE_BIN: /usr/bin/ffprobe
+      VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
+      VIDEO_EXPORT_RETENTION_DAYS: ${VIDEO_EXPORT_RETENTION_DAYS:-30}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    volumes:
+      - storage-cache:/var/www/html/storage/cache
+      - storage-logs:/var/www/html/storage/logs
+      - storage-temp:/var/www/html/storage/temp
+      - video-uploads:/var/www/html/storage/video/uploads
+      - video-jobs:/var/www/html/storage/video/jobs
+      - video-exports:/var/www/html/storage/video/exports
+      - video-temp:/var/www/html/storage/video/temp
+    healthcheck:
+      test: ["CMD-SHELL", "php -r '$$s=@fsockopen(\"127.0.0.1\",80); if ($$s) { fclose($$s); exit(0); } exit(1);'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - mi-central-private
+
+  db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-mi_central}
+      MARIADB_USER: ${DB_USERNAME:-mi_central}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    command: ["mariadbd", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - mi-central-private
+
+  worker:
+    image: mi-central-worker:prod
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_NAME: ${APP_NAME:-Mi Central}
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:-http://localhost}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santiago}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-mi_central}
+      DB_USERNAME: ${DB_USERNAME:-mi_central}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      SESSION_NAME: ${SESSION_NAME:-mi_central_session}
+      SESSION_SECURE: ${SESSION_SECURE:-false}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-7200}
+      COLLECTOR_HTTP_TIMEOUT: ${COLLECTOR_HTTP_TIMEOUT:-15}
+      COLLECTOR_HTTP_CONNECT_TIMEOUT: ${COLLECTOR_HTTP_CONNECT_TIMEOUT:-5}
+      COLLECTOR_HTTP_MAX_REDIRECTS: ${COLLECTOR_HTTP_MAX_REDIRECTS:-3}
+      COLLECTOR_USER_AGENT: ${COLLECTOR_USER_AGENT:-MiCentral-DiscountCollector/1.0}
+      COLLECTOR_MAX_RESPONSE_BYTES: ${COLLECTOR_MAX_RESPONSE_BYTES:-1048576}
+      COLLECTOR_DEFAULT_INTERVAL_MINUTES: ${COLLECTOR_DEFAULT_INTERVAL_MINUTES:-1440}
+      COLLECTOR_MIN_INTERVAL_MINUTES: ${COLLECTOR_MIN_INTERVAL_MINUTES:-60}
+      COLLECTOR_RETRY_MINUTES: ${COLLECTOR_RETRY_MINUTES:-60}
+      COLLECTOR_STALE_AFTER_MINUTES: ${COLLECTOR_STALE_AFTER_MINUTES:-180}
+      COLLECTOR_BANCO_CHILE_MAX_ITEMS: ${COLLECTOR_BANCO_CHILE_MAX_ITEMS:-0}
+      COLLECTOR_BANCO_CHILE_REQUEST_DELAY_MS: ${COLLECTOR_BANCO_CHILE_REQUEST_DELAY_MS:-500}
+      COLLECTOR_SANTANDER_MAX_ITEMS: ${COLLECTOR_SANTANDER_MAX_ITEMS:-0}
+      COLLECTOR_SANTANDER_REQUEST_DELAY_MS: ${COLLECTOR_SANTANDER_REQUEST_DELAY_MS:-500}
+      COLLECTOR_BANCOESTADO_MAX_ITEMS: ${COLLECTOR_BANCOESTADO_MAX_ITEMS:-0}
+      COLLECTOR_BANCOESTADO_REQUEST_DELAY_MS: ${COLLECTOR_BANCOESTADO_REQUEST_DELAY_MS:-500}
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      FFPROBE_BIN: /usr/bin/ffprobe
+      VIDEO_MAX_UPLOAD_MB: ${VIDEO_MAX_UPLOAD_MB:-1024}
+      VIDEO_EXPORT_RETENTION_DAYS: ${VIDEO_EXPORT_RETENTION_DAYS:-30}
+      TZ: ${APP_TIMEZONE:-America/Santiago}
+    volumes:
+      - storage-cache:/var/www/html/storage/cache
+      - storage-logs:/var/www/html/storage/logs
+      - storage-temp:/var/www/html/storage/temp
+      - video-uploads:/var/www/html/storage/video/uploads
+      - video-jobs:/var/www/html/storage/video/jobs
+      - video-exports:/var/www/html/storage/video/exports
+      - video-temp:/var/www/html/storage/video/temp
+    working_dir: /var/www/html
+    command: ["sh", "/var/www/html/docker/worker/start-cron.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "php workers/check-video-environment.php >/dev/null 2>&1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - mi-central-private
+
+networks:
+  mi-central-private:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  storage-cache:
+  storage-logs:
+  storage-temp:
+  video-uploads:
+  video-jobs:
+  video-exports:
+  video-temp:

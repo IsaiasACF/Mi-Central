@@ -88,6 +88,40 @@ final class NotificationService
      */
     private function targetUrl(array $notification): ?string
     {
+        $entityType = (string) ($notification['entity_type'] ?? '');
+        $entityId = (int) ($notification['entity_id'] ?? 0);
+
+        if ($entityType === 'task' && $entityId > 0) {
+            if (($notification['entity_task_project_id'] ?? null) !== null) {
+                return '/index.php?section=organization&tab=projects&project='
+                    . rawurlencode((string) $notification['entity_task_project_id'])
+                    . '&edit_task=' . rawurlencode((string) $entityId);
+            }
+
+            return '/index.php?section=organization&tab=tasks&status=all&edit_task=' . rawurlencode((string) $entityId);
+        }
+
+        if ($entityType === 'project' && $entityId > 0) {
+            return '/index.php?section=organization&tab=projects&project=' . rawurlencode((string) $entityId);
+        }
+
+        if ($entityType === 'note' && $entityId > 0) {
+            return '/index.php?section=organization&tab=notes&status=active';
+        }
+
+        if ($entityType === 'video_export') {
+            return '/index.php?section=video&tab=processings';
+        }
+
+        if ($entityType === 'expense' && $entityId > 0 && is_string($notification['expense_period_month'] ?? null)) {
+            $month = substr((string) $notification['expense_period_month'], 0, 7);
+
+            return '/index.php?section=expenses&month='
+                . rawurlencode($month)
+                . '&expense=' . rawurlencode((string) $entityId)
+                . '#expense-' . rawurlencode((string) $entityId);
+        }
+
         if (($notification['reminder_task_id'] ?? null) !== null) {
             $taskId = rawurlencode((string) $notification['reminder_task_id']);
 
@@ -113,6 +147,28 @@ final class NotificationService
      */
     private function targetLabel(array $notification): ?string
     {
+        $entityType = (string) ($notification['entity_type'] ?? '');
+
+        if ($entityType === 'task') {
+            return 'Tarea: ' . (string) ($notification['entity_task_title'] ?? 'sin titulo');
+        }
+
+        if ($entityType === 'project') {
+            return 'Proyecto: ' . (string) ($notification['entity_project_title'] ?? 'sin titulo');
+        }
+
+        if ($entityType === 'note') {
+            return 'Nota: ' . (string) ($notification['entity_note_title'] ?? 'sin titulo');
+        }
+
+        if ($entityType === 'video_export') {
+            return 'Video: ' . (string) ($notification['video_export_name'] ?? 'exportacion');
+        }
+
+        if ($entityType === 'expense') {
+            return 'Gasto: ' . (string) ($notification['expense_description'] ?? 'sin descripcion');
+        }
+
         if (($notification['reminder_task_id'] ?? null) !== null) {
             return 'Tarea: ' . (string) ($notification['task_title'] ?? 'sin titulo');
         }
@@ -128,6 +184,20 @@ final class NotificationService
     {
         return match ($type) {
             NotificationRepository::TYPE_REMINDER_DUE => 'Recordatorio',
+            NotificationRepository::TYPE_DAILY_AGENDA => 'Tu dia',
+            NotificationRepository::TYPE_TASK_DUE_TODAY,
+            NotificationRepository::TYPE_TASK_DUE_SOON,
+            NotificationRepository::TYPE_TASK_STARTS_TODAY,
+            NotificationRepository::TYPE_TASK_OVERDUE => 'Tarea',
+            NotificationRepository::TYPE_PROJECT_SUMMARY => 'Proyecto',
+            NotificationRepository::TYPE_NOTE_DAILY_REMINDER => 'Nota',
+            NotificationRepository::TYPE_VIDEO_EXPORT_COMPLETED,
+            NotificationRepository::TYPE_VIDEO_EXPORT_FAILED => 'Video',
+            NotificationRepository::TYPE_EXPENSE_DUE_SOON,
+            NotificationRepository::TYPE_EXPENSE_DUE_TODAY,
+            NotificationRepository::TYPE_EXPENSE_OVERDUE,
+            NotificationRepository::TYPE_EXPENSE_MISSING_AMOUNT,
+            NotificationRepository::TYPE_EXPENSE_WEEKLY_SUMMARY => 'Gastos',
             default => 'Notificacion',
         };
     }

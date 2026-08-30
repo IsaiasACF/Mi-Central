@@ -20,9 +20,9 @@ $url = static function (string $filter): string {
 >
     <div class="tasks-heading">
         <div>
-            <p class="eyebrow">Centro interno</p>
+            <p class="eyebrow">Centro de actividad</p>
             <h1>Notificaciones</h1>
-            <p class="muted">Avisos generados dentro de Mi Central. No hay Push, email ni servicios externos en esta fase.</p>
+            <p class="muted">Recordatorios, tareas, proyectos, video y futuras fuentes en un solo lugar.</p>
         </div>
         <button class="button button--secondary" type="button" data-notification-action="read-all">Marcar todas como leidas</button>
     </div>
@@ -46,7 +46,7 @@ $url = static function (string $filter): string {
                 $targetUrl = is_string($notification['target_url'] ?? null) ? (string) $notification['target_url'] : null;
                 $targetLabel = is_string($notification['target_label'] ?? null) ? (string) $notification['target_label'] : null;
                 ?>
-                <article class="notification-item<?= $isRead ? ' is-read' : ' is-unread' ?>" data-notification-id="<?= View::escape((string) ($notification['id'] ?? '')) ?>">
+                <article class="notification-item<?= $isRead ? ' is-read' : ' is-unread' ?>" data-notification-id="<?= View::escape((string) ($notification['id'] ?? '')) ?>" data-source-module="<?= View::escape((string) ($notification['source_module'] ?? '')) ?>">
                     <div class="notification-item__main">
                         <p class="dashboard-card__eyebrow"><?= View::escape($notification['type_label'] ?? 'Notificacion') ?></p>
                         <h3><?= View::escape($notification['title'] ?? '') ?></h3>

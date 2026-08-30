@@ -43,7 +43,7 @@ $emptyMessages = [
     'friends' => 'Aun no hay amigos activos con horario.',
     'coincidences' => 'Sin coincidencias proximas.',
     'discounts' => 'No hay descuentos disponibles.',
-    'video' => 'No hay procesamientos recientes.',
+    'video' => 'Aun no hay actividad de video.',
 ];
 
 foreach ($emptyMessages as $sectionKey => $message) {

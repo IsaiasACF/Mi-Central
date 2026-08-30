@@ -257,7 +257,7 @@ try {
     video_segments_login($username, $password, $cookieFile);
     video_segments_login($otherUsername, $otherPassword, $otherCookieFile);
 
-    $detail = video_segments_request('http://127.0.0.1/index.php?section=video-editor&id=' . $videoId . '&editor=1', 'GET', null, $cookieFile);
+    $detail = video_segments_request('http://127.0.0.1/index.php?section=video&id=' . $videoId . '&editor=1', 'GET', null, $cookieFile);
     video_segments_assert($detail['status'] === 200 && str_contains($detail['body'], 'data-video-segments-panel') && str_contains($detail['body'], 'data-video-timeline'), 'Editor did not render timeline and segments.');
     $csrf = video_segments_screen_csrf($detail['body']);
 

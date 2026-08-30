@@ -28,6 +28,14 @@ final class VideoExportService
     }
 
     /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function listProcessed(int $userId, int $limit = 100): array
+    {
+        return $this->jobResources($this->jobs->listForUser($userId, $limit));
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function getJob(int $userId, int $jobId): ?array
@@ -102,6 +110,24 @@ final class VideoExportService
     }
 
     /**
+     * @param array<string, mixed> $job
+     */
+    public function isExpired(array $job): bool
+    {
+        if ((string) ($job['status'] ?? '') !== 'completed') {
+            return false;
+        }
+
+        $expiresAt = $job['expires_at'] ?? null;
+
+        if (!is_string($expiresAt) || $expiresAt === '') {
+            return false;
+        }
+
+        return strtotime($expiresAt . ' UTC') !== false && (int) strtotime($expiresAt . ' UTC') <= time();
+    }
+
+    /**
      * @param array<int, array{source_start_seconds: float, source_end_seconds: float}> $sequence
      */
     private function estimatedDuration(array $sequence, float $videoDuration): float
@@ -148,22 +174,32 @@ final class VideoExportService
      */
     private function jobResource(array $job): array
     {
+        $status = (string) ($job['status'] ?? '');
+        $isExpired = $this->isExpired($job);
+        $isDownloadable = $status === 'completed'
+            && !$isExpired
+            && (($this->storage ?? new VideoStorage([]))->pathForExportJob($job) !== null);
+
         return [
             'id' => (int) ($job['id'] ?? 0),
             'video_id' => (int) ($job['video_id'] ?? 0),
-            'status' => (string) ($job['status'] ?? ''),
+            'status' => $status,
+            'display_status' => $isExpired ? 'expired' : $status,
+            'is_expired' => $isExpired,
+            'is_downloadable' => $isDownloadable,
             'output_name' => (string) ($job['output_name'] ?? ''),
+            'video_original_name' => (string) ($job['video_original_name'] ?? ''),
             'estimated_duration_seconds' => round((float) ($job['estimated_duration_seconds'] ?? 0), 3),
-            'output_size_bytes' => $job['output_size_bytes'] === null ? null : (int) $job['output_size_bytes'],
-            'error_message' => $job['error_message'] === null ? null : (string) $job['error_message'],
+            'output_size_bytes' => ($job['output_size_bytes'] ?? null) === null ? null : (int) $job['output_size_bytes'],
+            'error_message' => ($job['error_message'] ?? null) === null ? null : (string) $job['error_message'],
             'progress_percent' => round((float) ($job['progress_percent'] ?? 0), 2),
             'processed_seconds' => ($job['processed_seconds'] ?? null) === null ? null : round((float) $job['processed_seconds'], 3),
             'speed' => ($job['speed'] ?? null) === null ? null : (string) $job['speed'],
             'output_duration_seconds' => ($job['output_duration_seconds'] ?? null) === null ? null : round((float) $job['output_duration_seconds'], 3),
             'expires_at' => ($job['expires_at'] ?? null) === null ? null : (string) $job['expires_at'],
             'created_at' => (string) ($job['created_at'] ?? ''),
-            'started_at' => $job['started_at'] === null ? null : (string) $job['started_at'],
-            'completed_at' => $job['completed_at'] === null ? null : (string) $job['completed_at'],
+            'started_at' => ($job['started_at'] ?? null) === null ? null : (string) $job['started_at'],
+            'completed_at' => ($job['completed_at'] ?? null) === null ? null : (string) $job['completed_at'],
         ];
     }
 

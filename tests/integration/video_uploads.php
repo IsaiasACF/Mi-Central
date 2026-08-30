@@ -247,7 +247,7 @@ try {
     $userId = $auth->createUser($username, $password);
     $otherUserId = $auth->createUser($otherUsername, $otherPassword);
 
-    $unauthenticatedPage = video_uploads_request('http://127.0.0.1/index.php?section=video-editor');
+    $unauthenticatedPage = video_uploads_request('http://127.0.0.1/index.php?section=video');
     video_uploads_assert($unauthenticatedPage['status'] === 302, 'Video page should require authentication.');
 
     $unauthenticatedApi = video_uploads_request('http://127.0.0.1/api/video/files.php');
@@ -256,7 +256,7 @@ try {
     video_uploads_login($username, $password, $cookieFile);
     video_uploads_login($otherUsername, $otherPassword, $otherCookieFile);
 
-    $page = video_uploads_request('http://127.0.0.1/index.php?section=video-editor', 'GET', null, $cookieFile);
+    $page = video_uploads_request('http://127.0.0.1/index.php?section=video', 'GET', null, $cookieFile);
     video_uploads_assert($page['status'] === 200 && str_contains($page['body'], 'Seleccionar video') && str_contains($page['body'], 'Mis videos'), 'Video upload page did not render.');
     video_uploads_assert(str_contains($page['body'], 'Aun no has subido videos.'), 'Empty video state did not render.');
     $csrf = video_uploads_screen_csrf($page['body']);
@@ -286,11 +286,11 @@ try {
     video_uploads_assert(is_file($createdFiles[0]), 'Uploaded physical file was not stored.');
     video_uploads_assert(($video['metadata_status'] ?? '') === 'pending', 'Fresh upload did not start with pending metadata.');
 
-    $immediateDetail = video_uploads_request('http://127.0.0.1/index.php?section=video-editor&id=' . (int) $video['id'], 'GET', null, $cookieFile);
+    $immediateDetail = video_uploads_request('http://127.0.0.1/index.php?section=video&id=' . (int) $video['id'], 'GET', null, $cookieFile);
     video_uploads_assert($immediateDetail['status'] === 200 && str_contains($immediateDetail['body'], 'vacaciones&lt;script&gt;.mp4') && str_contains($immediateDetail['body'], 'Analizando informacion del video...'), 'Freshly uploaded video detail was not immediately reachable.');
 
     $videoJs = file_get_contents(dirname(__DIR__, 2) . '/public/assets/js/app.js');
-    video_uploads_assert(is_string($videoJs) && str_contains($videoJs, "window.location.href = '/index.php?section=video-editor'") && str_contains($videoJs, "titleLink.href = '/index.php?section=video-editor&id='"), 'Upload flow or dynamic links are not wired for immediate navigation.');
+    video_uploads_assert(is_string($videoJs) && str_contains($videoJs, "window.location.href = '/index.php?section=video'") && str_contains($videoJs, "titleLink.href = '/index.php?section=video&id='"), 'Upload flow or dynamic links are not wired for immediate navigation.');
 
     $list = video_uploads_request('http://127.0.0.1/api/video/files.php', 'GET', null, $cookieFile);
     video_uploads_assert($list['status'] === 200 && count($list['json']['data'] ?? []) === 1, 'Video list did not return own upload.');
@@ -306,7 +306,7 @@ try {
     $createdFiles[] = $largePath;
     video_uploads_assert(is_file($largePath), 'MP4 around 45 MB was not moved to storage/video/uploads.');
 
-    $rendered = video_uploads_request('http://127.0.0.1/index.php?section=video-editor', 'GET', null, $cookieFile);
+    $rendered = video_uploads_request('http://127.0.0.1/index.php?section=video', 'GET', null, $cookieFile);
     video_uploads_assert(str_contains($rendered['body'], 'vacaciones&lt;script&gt;.mp4') && !str_contains($rendered['body'], 'vacaciones<script>.mp4'), 'Original video name was not escaped.');
     video_uploads_assert(!str_contains($rendered['body'], (string) ($storedVideo['storage_path'] ?? '')), 'Internal storage path was exposed in UI.');
 

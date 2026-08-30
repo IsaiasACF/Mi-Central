@@ -1,6 +1,6 @@
 # Importacion JSON de horarios
 
-Este formato permite importar bloques semanales al modulo Amigos en la U.
+Este formato permite importar bloques semanales al modulo Horarios.
 
 El JSON no decide el propietario del horario. El destino se selecciona en la interfaz de Mi Central:
 

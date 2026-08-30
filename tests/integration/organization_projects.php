@@ -186,7 +186,6 @@ try {
         [
             'title' => 'Tarea del proyecto',
             'project_id' => (string) $projectId,
-            'priority' => 'normal',
         ],
         $cookieFile,
         $csrfHeader

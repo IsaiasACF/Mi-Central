@@ -23,6 +23,28 @@ final class VideoStreamService
     {
         $path = ($this->storage ?? new VideoStorage($this->config))->pathForStoredVideo($video);
 
+        $this->streamPath($path, $video, $rangeHeader, $method);
+    }
+
+    /**
+     * @param array<string, mixed> $job
+     */
+    public function streamExport(array $job, ?string $rangeHeader, string $method = 'GET'): void
+    {
+        $path = ($this->storage ?? new VideoStorage($this->config))->pathForExportJob($job);
+        $resource = [
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+        ];
+
+        $this->streamPath($path, $resource, $rangeHeader, $method);
+    }
+
+    /**
+     * @param array<string, mixed> $resource
+     */
+    private function streamPath(?string $path, array $resource, ?string $rangeHeader, string $method): void
+    {
         if ($path === null) {
             http_response_code(404);
             return;
@@ -49,7 +71,7 @@ final class VideoStreamService
         $length = $end - $start + 1;
 
         http_response_code($partial ? 206 : 200);
-        header('Content-Type: ' . $this->contentType($video));
+        header('Content-Type: ' . $this->contentType($resource));
         header('Accept-Ranges: bytes');
         header('Content-Length: ' . $length);
         header('Cache-Control: private, no-store');

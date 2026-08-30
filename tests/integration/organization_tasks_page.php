@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 use App\Database\Connection;
 use App\Services\AuthService;
+use Modules\Organization\LabelRepository;
+use Modules\Organization\LabelService;
 use Modules\Organization\SpaceRepository;
 use Modules\Organization\TaskRepository;
 use Modules\Organization\TaskService;
@@ -11,7 +13,8 @@ require dirname(__DIR__, 2) . '/app/bootstrap.php';
 
 $pdo = Connection::get();
 $auth = new AuthService($pdo);
-$taskService = new TaskService(new TaskRepository($pdo));
+$labelService = new LabelService(new LabelRepository($pdo));
+$taskService = new TaskService(new TaskRepository($pdo), 'America/Santiago', $labelService);
 $spaceRepository = new SpaceRepository($pdo);
 $username = 'test_tasks_page_' . bin2hex(random_bytes(4));
 $otherUsername = 'test_tasks_page_other_' . bin2hex(random_bytes(4));
@@ -189,27 +192,24 @@ try {
         'title' => $unsafeTitle,
         'description' => '<b>detalle</b>',
         'space_id' => $spaceId,
-        'priority' => 'normal',
     ]);
     $completedTask = $taskService->create($userId, [
         'title' => 'Tarea completada sin espacio',
-        'priority' => 'high',
         'status' => 'completed',
     ]);
+    $label = $labelService->create($userId, ['name' => 'INF295', 'color' => '#3366CC']);
     $todayTask = $taskService->create($userId, [
         'title' => 'Filtro hoy universidad alta',
         'space_id' => $spaceId,
-        'priority' => 'high',
         'due_at' => task_test_due_at('today 23:59'),
+        'label_ids' => [(int) $label['id']],
     ]);
     $overdueTask = $taskService->create($userId, [
         'title' => 'Filtro vencida bandeja',
-        'priority' => 'normal',
         'due_at' => task_test_due_at('-1 hour'),
     ]);
     $taskService->create($userId, [
         'title' => 'Filtro sin vencimiento',
-        'priority' => 'low',
     ]);
     $taskService->create($userId, [
         'title' => 'Tarea de proyecto no mezclada',
@@ -232,10 +232,13 @@ try {
     $homePage = tasks_page_request('http://127.0.0.1/index.php', 'GET', null, $cookieFile);
     assert_tasks_page($homePage['status'] === 200, 'Authenticated home page did not load.');
     assert_tasks_page(tasks_page_app_js_count($homePage['body']) === 1, 'App JavaScript was loaded more than once.');
-    assert_tasks_page(substr_count($homePage['body'], 'data-nav-toggle') === 2, 'Sidebar collapsible buttons were not rendered.');
-    assert_tasks_page(substr_count($homePage['body'], 'data-nav-panel hidden') === 2, 'Sidebar groups were not collapsed on home.');
+    assert_tasks_page(substr_count($homePage['body'], 'data-nav-toggle') === 0, 'Video sidebar group was still collapsible.');
+    assert_tasks_page(substr_count($homePage['body'], 'data-nav-panel hidden') === 0, 'Sidebar still rendered collapsed video panels.');
     assert_tasks_page(str_contains($homePage['body'], 'href="/index.php?section=organization"'), 'Organization direct sidebar link was not rendered.');
     assert_tasks_page(str_contains($homePage['body'], 'href="/index.php?section=friends"'), 'Friends direct sidebar link was not rendered.');
+    assert_tasks_page(str_contains($homePage['body'], 'href="/index.php?section=video"'), 'Video direct sidebar link was not rendered.');
+    assert_tasks_page(!str_contains($homePage['body'], 'section=video-processing'), 'Video processing sidebar link was still rendered.');
+    assert_tasks_page(!str_contains($homePage['body'], 'section=video-editor'), 'Video editor sidebar link was still rendered.');
     foreach (['organization-inbox', 'organization-tasks', 'organization-university', 'organization-work'] as $legacySection) {
         assert_tasks_page(!str_contains($homePage['body'], $legacySection), 'Legacy organization sidebar section was rendered.');
     }
@@ -246,7 +249,7 @@ try {
     $tasksPage = tasks_page_request('http://127.0.0.1/index.php?section=organization', 'GET', null, $cookieFile);
     assert_tasks_page($tasksPage['status'] === 200, 'Authenticated tasks page did not load.');
     assert_tasks_page(str_contains($tasksPage['body'], 'Organizacion'), 'Organization page title was not rendered.');
-    assert_tasks_page(str_contains($tasksPage['body'], 'Tareas') && str_contains($tasksPage['body'], 'Proyectos') && str_contains($tasksPage['body'], 'Notas') && str_contains($tasksPage['body'], 'Calendario'), 'Organization tabs were not rendered.');
+    assert_tasks_page(str_contains($tasksPage['body'], 'Tareas') && str_contains($tasksPage['body'], 'Proyectos') && str_contains($tasksPage['body'], 'Notas') && str_contains($tasksPage['body'], 'Calendario') && str_contains($tasksPage['body'], 'Etiquetas'), 'Organization tabs were not rendered.');
     assert_tasks_page(str_contains($tasksPage['body'], 'organization-tab is-active'), 'Tasks tab was not active by default.');
     assert_tasks_page(str_contains($tasksPage['body'], '&lt;script&gt;alert(1)&lt;/script&gt;'), 'User content was not escaped.');
     assert_tasks_page(!str_contains($tasksPage['body'], $unsafeTitle), 'Raw user content appeared in HTML.');
@@ -257,6 +260,8 @@ try {
     foreach (['Todos', 'Hoy', 'Esta semana', 'Vencidos', 'Bandeja', 'Universidad', 'Amigos', 'Personal', 'Trabajo'] as $label) {
         assert_tasks_page(str_contains($tasksPage['body'], $label), "Missing organization filter label: {$label}");
     }
+    assert_tasks_page(!str_contains($tasksPage['body'], 'Prioridad'), 'Manual priority appeared in tasks UI.');
+    assert_tasks_page(str_contains($tasksPage['body'], 'Por vencimiento'), 'Deadline sorting option was not rendered.');
 
     $completedPage = tasks_page_request(
         'http://127.0.0.1/index.php?section=organization&status=completed',
@@ -285,14 +290,16 @@ try {
     assert_tasks_page(str_contains($spacePage['body'], 'Filtro hoy universidad alta'), 'Universidad filter did not show university task.');
     assert_tasks_page(!str_contains($spacePage['body'], 'Tarea completada sin espacio'), 'Universidad filter showed inbox task.');
 
-    $priorityPage = tasks_page_request(
-        'http://127.0.0.1/index.php?section=organization&status=all&priority=high',
+    $labelPage = tasks_page_request(
+        'http://127.0.0.1/index.php?section=organization&status=all&label=' . (int) $todayTask['labels'][0]['id'],
         'GET',
         null,
         $cookieFile
     );
-    assert_tasks_page(str_contains($priorityPage['body'], 'Filtro hoy universidad alta'), 'High priority filter did not show high task.');
-    assert_tasks_page(!str_contains($priorityPage['body'], 'Filtro sin vencimiento'), 'High priority filter showed low task.');
+    assert_tasks_page(str_contains($labelPage['body'], 'Filtro hoy universidad alta'), 'Label filter did not show labeled task.');
+    assert_tasks_page(!str_contains($labelPage['body'], 'Filtro sin vencimiento'), 'Label filter showed unlabeled task.');
+    assert_tasks_page(str_contains($labelPage['body'], 'data-label-color="#3366CC"'), 'Task label did not render the HEX stored in the database.');
+    assert_tasks_page(str_contains($labelPage['body'], '--label-color: #3366CC; --label-text-color: #FFFFFF'), 'Task label did not render computed contrast from its stored HEX.');
 
     $todayPage = tasks_page_request(
         'http://127.0.0.1/index.php?section=organization&time=today',
@@ -321,7 +328,7 @@ try {
     assert_tasks_page(!str_contains($overduePage['body'], 'Filtro hoy universidad alta'), 'Overdue filter showed non-overdue task.');
 
     $combinedPage = tasks_page_request(
-        'http://127.0.0.1/index.php?section=organization&space=universidad&status=pending&priority=high&time=week',
+        'http://127.0.0.1/index.php?section=organization&space=universidad&status=pending&label=' . (int) $todayTask['labels'][0]['id'] . '&time=week',
         'GET',
         null,
         $cookieFile
@@ -349,7 +356,6 @@ try {
             'title' => $createTitle,
             'description' => 'Descripcion inicial',
             'space_id' => (string) $spaceId,
-            'priority' => 'low',
             'starts_at' => '2026-08-18T12:30',
             'ends_at' => '2026-08-18T13:00',
             'due_at' => '2026-08-18T13:30',
@@ -379,7 +385,6 @@ try {
             'title' => 'Editada desde interfaz HTTP',
             'description' => 'Descripcion editada',
             'space_id' => '',
-            'priority' => 'high',
             'starts_at' => '',
             'ends_at' => '',
             'due_at' => '',

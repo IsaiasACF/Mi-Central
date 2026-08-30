@@ -12,9 +12,23 @@ if (!is_array($home) || $home['key'] !== 'home') {
     exit(1);
 }
 
-$known = Navigation::resolve('video-editor');
+$known = Navigation::resolve('video');
 
-if (!is_array($known) || $known['title'] !== 'Video') {
+if (!is_array($known) || $known['title'] !== 'Video' || $known['label'] !== 'Video') {
+    fwrite(STDERR, "Navigation: FAILED\n");
+    exit(1);
+}
+
+$settings = Navigation::resolve('settings');
+
+if (
+    Navigation::url('video') !== '/index.php?section=video'
+    || Navigation::resolve('video-editor') !== null
+    || Navigation::resolve('video-processing') !== null
+    || !is_array($settings)
+    || $settings['label'] !== 'Configuracion'
+    || Navigation::resolve('video-settings') !== null
+) {
     fwrite(STDERR, "Navigation: FAILED\n");
     exit(1);
 }
@@ -22,6 +36,19 @@ if (!is_array($known) || $known['title'] !== 'Video') {
 $organization = Navigation::resolve('organization');
 
 if (!is_array($organization) || $organization['label'] !== 'Organizacion') {
+    fwrite(STDERR, "Navigation: FAILED\n");
+    exit(1);
+}
+
+$discounts = Navigation::resolve('discounts');
+
+if (
+    !is_array($discounts)
+    || $discounts['label'] !== 'Descuentos'
+    || Navigation::url('discounts') !== '/index.php?section=discounts'
+    || Navigation::resolve('discounts-benefits') !== null
+    || Navigation::resolve('discounts-for-me') !== null
+) {
     fwrite(STDERR, "Navigation: FAILED\n");
     exit(1);
 }

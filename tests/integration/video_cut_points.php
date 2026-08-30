@@ -230,14 +230,14 @@ try {
     video_cuts_login($username, $password, $cookieFile);
     video_cuts_login($otherUsername, $otherPassword, $otherCookieFile);
 
-    $detail = video_cuts_request('http://127.0.0.1/index.php?section=video-editor&id=' . $videoId, 'GET', null, $cookieFile);
+    $detail = video_cuts_request('http://127.0.0.1/index.php?section=video&id=' . $videoId, 'GET', null, $cookieFile);
     video_cuts_assert($detail['status'] === 200 && str_contains($detail['body'], 'Editar video'), 'Detail did not expose editor action.');
     $csrf = video_cuts_screen_csrf($detail['body']);
 
-    $editor = video_cuts_request('http://127.0.0.1/index.php?section=video-editor&id=' . $videoId . '&editor=1', 'GET', null, $cookieFile);
+    $editor = video_cuts_request('http://127.0.0.1/index.php?section=video&id=' . $videoId . '&editor=1', 'GET', null, $cookieFile);
     video_cuts_assert($editor['status'] === 200 && str_contains($editor['body'], 'data-video-editor') && str_contains($editor['body'], 'data-video-timeline') && str_contains($editor['body'], 'Aun no has agregado puntos de corte.'), 'Editor timeline did not render.');
 
-    $blocked = video_cuts_request('http://127.0.0.1/index.php?section=video-editor&id=' . $pendingVideoId . '&editor=1', 'GET', null, $cookieFile);
+    $blocked = video_cuts_request('http://127.0.0.1/index.php?section=video&id=' . $pendingVideoId . '&editor=1', 'GET', null, $cookieFile);
     video_cuts_assert($blocked['status'] === 200 && str_contains($blocked['body'], 'El video debe terminar de analizarse antes de abrir el editor.'), 'Video without duration was editable.');
 
     $missingVideo = video_cuts_request('http://127.0.0.1/api/video/cuts.php?video_id=999999999&action=create', 'POST', ['action' => 'create', 'position_seconds' => 1], $cookieFile, ['X-CSRF-Token: ' . $csrf]);

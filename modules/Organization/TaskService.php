@@ -9,13 +9,16 @@ final class TaskService
 {
     private const TITLE_MAX_LENGTH = 180;
     private const STATUSES = ['pending', 'completed'];
-    private const PRIORITIES = ['low', 'normal', 'high'];
+
+    private readonly DeadlineUrgencyService $urgency;
 
     public function __construct(
         private readonly TaskRepository $tasks,
         private readonly string $timezone = DateTimeHelper::DEFAULT_TIMEZONE,
-    )
-    {
+        private readonly ?LabelService $labels = null,
+        ?DeadlineUrgencyService $urgency = null,
+    ) {
+        $this->urgency = $urgency ?? new DeadlineUrgencyService($timezone);
     }
 
     /**
@@ -33,19 +36,22 @@ final class TaskService
             'title' => $this->title($input['title'] ?? ''),
             'description' => $this->optionalText($input['description'] ?? null),
             'status' => $status,
-            'priority' => $this->priority($input['priority'] ?? 'normal'),
+            'priority' => 'normal',
             'starts_at' => $this->optionalDateTime($input['starts_at'] ?? null, 'starts_at'),
             'ends_at' => $this->optionalDateTime($input['ends_at'] ?? null, 'ends_at'),
             'due_at' => $this->optionalDateTime($input['due_at'] ?? null, 'due_at'),
             'completed_at' => $status === 'completed' ? DateTimeHelper::nowUtcStorage() : null,
             'position' => $this->position($input['position'] ?? null, $userId),
         ];
+        $labelIds = $this->labels?->labelIdsFromInput($input) ?? [];
 
         $data = $this->withCoherentProjectSpace($userId, $data);
         $this->assertRelationshipsBelongToUser($userId, $data);
+        $this->labels?->assertLabelIdsBelongToUser($userId, $labelIds);
         $this->assertDateRange($data['starts_at'], $data['ends_at']);
 
         $taskId = $this->tasks->create($userId, $data);
+        $this->labels?->syncEntityLabels($userId, 'task', $taskId, $labelIds);
 
         return $this->get($userId, $taskId) ?? [];
     }
@@ -57,7 +63,17 @@ final class TaskService
     {
         $task = $this->tasks->findByIdForUser($userId, $this->positiveId($taskId, 'id'));
 
-        return $task === null ? null : $this->withDerivedDates($task);
+        if ($task === null) {
+            return null;
+        }
+
+        $task = $this->withDerivedDates($task);
+
+        if ($this->labels !== null) {
+            $task = $this->labels->attachLabelsToEntities($userId, 'task', [$task])[0] ?? $task;
+        }
+
+        return $task;
     }
 
     /**
@@ -102,10 +118,6 @@ final class TaskService
             $normalized['status'] = $this->status($filters['status']);
         }
 
-        if (isset($filters['priority']) && $filters['priority'] !== '') {
-            $normalized['priority'] = $this->priority($filters['priority']);
-        }
-
         if (isset($filters['due_from']) && $filters['due_from'] !== '') {
             $normalized['due_from'] = $this->optionalDateTime($filters['due_from'], 'due_from');
         }
@@ -118,10 +130,30 @@ final class TaskService
             $normalized['due_before'] = $this->optionalDateTime($filters['due_before'], 'due_before');
         }
 
-        return array_map(
+        if (isset($filters['label_id']) && $filters['label_id'] !== '' && $filters['label_id'] !== 'all') {
+            $labelId = $this->optionalPositiveInt($filters['label_id'], 'label_id');
+
+            if ($this->labels === null || $labelId === null || $this->labels->get($userId, $labelId) === null) {
+                throw new TaskValidationException('Relacion invalida.');
+            }
+
+            $normalized['label_id'] = $labelId;
+        }
+
+        $tasks = array_map(
             fn (array $task): array => $this->withDerivedDates($task),
             $this->tasks->listForUser($userId, $normalized),
         );
+
+        if ($this->labels !== null) {
+            $tasks = $this->labels->attachLabelsToEntities($userId, 'task', $tasks);
+        }
+
+        if (($filters['sort'] ?? 'deadline') === 'deadline') {
+            $this->sortByDeadline($tasks, 'due_at');
+        }
+
+        return $tasks;
     }
 
     /**
@@ -153,10 +185,6 @@ final class TaskService
 
         if (array_key_exists('description', $input)) {
             $data['description'] = $this->optionalText($input['description']);
-        }
-
-        if (array_key_exists('priority', $input)) {
-            $data['priority'] = $this->priority($input['priority']);
         }
 
         if (array_key_exists('starts_at', $input)) {
@@ -191,7 +219,19 @@ final class TaskService
             array_key_exists('starts_at', $data) ? $data['starts_at'] : ($currentTask['starts_at'] ?? null),
             array_key_exists('ends_at', $data) ? $data['ends_at'] : ($currentTask['ends_at'] ?? null)
         );
+        $labelIds = array_key_exists('label_ids', $input) && $this->labels !== null
+            ? $this->labels->labelIdsFromInput($input)
+            : null;
+
+        if ($labelIds !== null) {
+            $this->labels?->assertLabelIdsBelongToUser($userId, $labelIds);
+        }
+
         $this->tasks->update($userId, $taskId, $data);
+
+        if ($labelIds !== null) {
+            $this->labels?->syncEntityLabels($userId, 'task', $taskId, $labelIds);
+        }
 
         return $this->get($userId, $taskId);
     }
@@ -313,6 +353,11 @@ final class TaskService
             $task[$field . '_input'] = DateTimeHelper::utcStorageToLocalInput($value, $this->timezone);
         }
 
+        $task['urgency'] = $this->urgency->forTask(
+            is_string($task['due_at'] ?? null) ? (string) $task['due_at'] : null,
+            (string) ($task['status'] ?? 'pending'),
+        );
+
         return $task;
     }
 
@@ -349,17 +394,6 @@ final class TaskService
         }
 
         return $status;
-    }
-
-    private function priority(mixed $priority): string
-    {
-        $priority = (string) $priority;
-
-        if (!in_array($priority, self::PRIORITIES, true)) {
-            throw new TaskValidationException('Prioridad invalida.');
-        }
-
-        return $priority;
     }
 
     private function optionalPositiveInt(mixed $value, string $field): ?int
@@ -412,5 +446,35 @@ final class TaskService
     private function optionalDateTime(mixed $value, string $field): ?string
     {
         return DateTimeHelper::optionalLocalInputToUtcStorage($value, $field, $this->timezone);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $tasks
+     */
+    private function sortByDeadline(array &$tasks, string $field): void
+    {
+        usort($tasks, static function (array $left, array $right) use ($field): int {
+            $leftCompleted = ($left['status'] ?? '') === 'completed';
+            $rightCompleted = ($right['status'] ?? '') === 'completed';
+
+            if ($leftCompleted !== $rightCompleted) {
+                return $leftCompleted <=> $rightCompleted;
+            }
+
+            $leftDeadline = $left[$field] ?? ($left['ends_at'] ?? null);
+            $rightDeadline = $right[$field] ?? ($right['ends_at'] ?? null);
+            $leftHasDeadline = is_string($leftDeadline) && $leftDeadline !== '';
+            $rightHasDeadline = is_string($rightDeadline) && $rightDeadline !== '';
+
+            if ($leftHasDeadline !== $rightHasDeadline) {
+                return $leftHasDeadline ? -1 : 1;
+            }
+
+            if ($leftHasDeadline && $rightHasDeadline && $leftDeadline !== $rightDeadline) {
+                return strcmp((string) $leftDeadline, (string) $rightDeadline);
+            }
+
+            return [(int) ($left['position'] ?? 0), (int) ($left['id'] ?? 0)] <=> [(int) ($right['position'] ?? 0), (int) ($right['id'] ?? 0)];
+        });
     }
 }

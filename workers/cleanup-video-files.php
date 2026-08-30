@@ -6,7 +6,6 @@ use App\Support\DateTimeHelper;
 use Modules\Video\VideoCleanupService;
 use Modules\Video\VideoExportJobRepository;
 use Modules\Video\VideoStorage;
-use Modules\Video\VideoTranscriptionRepository;
 
 if (PHP_SAPI !== 'cli') {
     fwrite(STDERR, "This command must run from CLI.\n");
@@ -24,7 +23,6 @@ try {
         $videoConfig,
         new VideoExportJobRepository($pdo),
         new VideoStorage($videoConfig),
-        new VideoTranscriptionRepository($pdo),
     );
     $summary = $cleanup->cleanup();
     $output = 'Expired exports removed: ' . $summary['expired_exports_removed'] . PHP_EOL

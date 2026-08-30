@@ -38,7 +38,7 @@ Mi Central es un proyecto independiente y no debe reutilizar arquitectura, confi
 Desde WSL, entrar al directorio del proyecto:
 
 ```sh
-cd "/mnt/c/Users/icart/OneDrive/Escritorio/My Space"
+cd "/mnt/c/My Space"
 ```
 
 Crear el archivo local de entorno:
@@ -153,4 +153,30 @@ docker compose logs -f
 docker compose exec worker php workers/process-reminders.php
 docker compose exec worker php workers/check-video-environment.php
 docker compose down
+```
+
+## Preparacion produccion Oracle ARM64
+
+`compose.prod.yaml` construye imagenes autocontenidas, sin bind mount del repositorio, y usa volumenes persistentes para MariaDB y storage runtime. HTTPS, dominio real, proxy inverso y despliegue automatico quedan para una fase posterior.
+
+Configurar `.env` con valores reales antes de iniciar:
+
+```sh
+cp .env.example .env
+```
+
+Validar y construir produccion:
+
+```sh
+make prod-config
+make prod-build
+```
+
+Al levantar produccion localmente para validacion:
+
+```sh
+make prod-up
+make prod-migrate
+make prod-seed
+make prod-video-worker-check
 ```
