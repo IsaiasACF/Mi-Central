@@ -1,21 +1,16 @@
 {
   "version": 2,
-  "routes": [
+  "services": {
+    "web": {
+      "root": ".",
+      "entrypoint": "Dockerfile.vercel",
+      "runtime": "container"
+    }
+  },
+  "rewrites": [
     {
-      "src": "/api/video/(.*)",
-      "status": 404
-    },
-    {
-      "src": "/api/jobs",
-      "dest": "/public/api/jobs.php"
-    },
-    {
-      "src": "/api/(.*)",
-      "dest": "/public/api/$1.php"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/$1"
+      "source": "/(.*)",
+      "destination": "service:web"
     }
   ],
   "crons": [
