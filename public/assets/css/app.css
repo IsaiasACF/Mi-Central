@@ -150,6 +150,12 @@ textarea:focus-visible {
     text-decoration: none;
 }
 
+.brand-link__logo {
+    display: block;
+    width: min(11rem, 34vw);
+    height: auto;
+}
+
 .session-user {
     color: var(--color-muted);
     font-size: 0.93rem;
@@ -4247,6 +4253,17 @@ p {
 
 .login-panel h1 {
     margin-bottom: 0;
+}
+
+.login-panel__brand {
+    display: flex;
+    justify-content: center;
+}
+
+.login-panel__logo {
+    display: block;
+    width: min(100%, 18rem);
+    height: auto;
 }
 
 .login-panel form {

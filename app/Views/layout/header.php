@@ -15,7 +15,9 @@ $recentNotifications = is_array($notifications['recent'] ?? null) ? $notificatio
             <span aria-hidden="true"></span>
             <span aria-hidden="true"></span>
         </button>
-        <a class="brand-link" href="/index.php"><?= View::escape($appName ?? 'Mi Central') ?></a>
+        <a class="brand-link" href="/index.php">
+            <img class="brand-link__logo" src="/brand/logo%20mi-central.png" alt="<?= View::escape($appName ?? 'Mi Central') ?>">
+        </a>
     </div>
     <div class="app-header__session">
         <div

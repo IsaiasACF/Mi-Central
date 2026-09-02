@@ -1273,6 +1273,7 @@ if ($page === null) {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/png" href="/brand/icon%20mi-central.png">
     <title><?= View::escape(($page['title'] ?? 'Seccion no encontrada') . ' - Mi Central') ?></title>
     <link rel="stylesheet" href="/assets/css/app.css?v=<?= (string) (filemtime(dirname(__DIR__) . '/public/assets/css/app.css') ?: '1') ?>">
 </head>
