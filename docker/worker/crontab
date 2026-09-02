@@ -1,0 +1,11 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-reminders.php >> /var/www/html/storage/logs/reminders-worker.log 2>&1'
+11 0 * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-recurring-expenses.php >> /var/www/html/storage/logs/recurring-expenses-worker.log 2>&1'
+17 * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-expense-notifications.php >> /var/www/html/storage/logs/expense-notifications-worker.log 2>&1'
+* * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-notification-activity.php >> /var/www/html/storage/logs/notification-activity-worker.log 2>&1'
+* * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-metadata.php >> /var/www/html/storage/logs/video-metadata-worker.log 2>&1'
+* * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-video-exports.php >> /var/www/html/storage/logs/video-exports-worker.log 2>&1'
+* * * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/process-discount-collectors.php >> /var/www/html/storage/logs/discount-collectors-worker.log 2>&1'
+17 2 * * * su -s /bin/sh www-data -c '. /tmp/mi-central-worker-env.sh; cd /var/www/html && /usr/local/bin/php workers/cleanup-video-files.php >> /var/www/html/storage/logs/video-cleanup-worker.log 2>&1'

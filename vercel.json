@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "services": {
+    "web": {
+      "root": ".",
+      "entrypoint": "Dockerfile.vercel",
+      "runtime": "container"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "service:web"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/jobs?job=process-reminders",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
