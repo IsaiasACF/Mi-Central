@@ -10,7 +10,9 @@
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "service:web"
+      "destination": {
+        "service": "web"
+      }
     }
   ],
   "crons": [
