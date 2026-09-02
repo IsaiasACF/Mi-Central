@@ -12,6 +12,9 @@ RUN apt-get update \
         libzip-dev \
         unzip \
         curl \
+        ca-certificates \
+    && update-ca-certificates \
+    && test -f /etc/ssl/certs/ca-certificates.crt \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install pdo pdo_mysql gd zip \
     && a2enmod rewrite headers \
