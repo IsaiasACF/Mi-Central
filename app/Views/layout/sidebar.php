@@ -4,6 +4,8 @@ declare(strict_types=1);
 use App\Support\Navigation;
 use App\Support\View;
 
+$videoEnabled = filter_var(getenv('VIDEO_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN);
+
 $navIcon = static function (mixed $icon): string {
     $icon = is_string($icon) ? $icon : 'circle';
     $paths = [
@@ -61,14 +63,25 @@ $navIcon = static function (mixed $icon): string {
                     <?php foreach ($items as $item): ?>
                         <?php $isActive = $item['key'] === $activeSection; ?>
                         <li>
-                            <a
-                                class="nav-link<?= $isActive ? ' is-active' : '' ?>"
-                                href="<?= View::escape(Navigation::url($item['key'])) ?>"
-                                <?= $isActive ? 'aria-current="page"' : '' ?>
-                            >
-                                <?= $navIcon($item['icon'] ?? null) ?>
-                                <span><?= View::escape($item['label']) ?></span>
-                            </a>
+                            <?php if ($item['key'] === 'video' && !$videoEnabled): ?>
+                                <span
+                                    class="nav-link nav-link--disabled"
+                                    aria-disabled="true"
+                                    title="No disponible en esta versión"
+                                >
+                                    <?= $navIcon($item['icon'] ?? null) ?>
+                                    <span><?= View::escape($item['label']) ?></span>
+                                </span>
+                            <?php else: ?>
+                                <a
+                                    class="nav-link<?= $isActive ? ' is-active' : '' ?>"
+                                    href="<?= View::escape(Navigation::url($item['key'])) ?>"
+                                    <?= $isActive ? 'aria-current="page"' : '' ?>
+                                >
+                                    <?= $navIcon($item['icon'] ?? null) ?>
+                                    <span><?= View::escape($item['label']) ?></span>
+                                </a>
+                            <?php endif; ?>
                         </li>
                     <?php endforeach; ?>
                 </ul>

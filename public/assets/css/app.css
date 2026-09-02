@@ -433,6 +433,12 @@ textarea:focus-visible {
     font-weight: 700;
 }
 
+.nav-link--disabled {
+    color: var(--color-muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 .app-content {
     min-width: 0;
     padding: var(--space-6);
