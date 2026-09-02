@@ -94,6 +94,7 @@ expense-notification-logs:
 test:
 	docker compose exec web php tests/unit/password_hashing.php
 	docker compose exec web php tests/unit/csrf.php
+	docker compose exec web php tests/integration/session_database.php
 	docker compose exec web php tests/unit/navigation.php
 	docker compose exec web php tests/unit/widget_rendering.php
 	docker compose exec web php tests/unit/organization_ui_rendering.php

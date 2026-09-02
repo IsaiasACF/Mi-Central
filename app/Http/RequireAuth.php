@@ -3,9 +3,6 @@ declare(strict_types=1);
 
 namespace App\Http;
 
-use App\Database\Connection;
-use App\Services\AuthService;
-
 final class RequireAuth
 {
     public static function ensure(array $sessionConfig): void
@@ -15,7 +12,7 @@ final class RequireAuth
         $user = Session::user();
         $userId = is_array($user) ? (int) ($user['user_id'] ?? 0) : 0;
 
-        if ($userId > 0 && (new AuthService(Connection::get()))->isSessionUserAllowed($userId)) {
+        if ($userId > 0) {
             return;
         }
 

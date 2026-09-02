@@ -136,8 +136,15 @@ final class CoincidenceService
      */
     public function getGroupCoincidencesForDate(int $userId, string $date, ?array $friendIds = null): array
     {
-        $individual = $this->getCoincidencesForDate($userId, $date, $friendIds);
+        return $this->groupCoincidences($this->getCoincidencesForDate($userId, $date, $friendIds));
+    }
 
+    /**
+     * @param array<int, array<string, mixed>> $individual
+     * @return array<int, array<string, mixed>>
+     */
+    public function groupCoincidences(array $individual): array
+    {
         if ($individual === []) {
             return [];
         }
@@ -186,6 +193,7 @@ final class CoincidenceService
 
             $campus = $this->groupCampus($covering);
             $userBlocks = $this->groupUserBlocks($covering);
+            $date = (string) ($covering[0]['date'] ?? '');
 
             $groups[] = [
                 'date' => $date,

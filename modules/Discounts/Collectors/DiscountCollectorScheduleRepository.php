@@ -142,8 +142,7 @@ final class DiscountCollectorScheduleRepository
                        OR last_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL {$staleAfterMinutes} MINUTE)
                    )
                  ORDER BY COALESCE(next_run_at, '1970-01-01 00:00:00') ASC, id ASC
-                 LIMIT 1
-                 FOR UPDATE SKIP LOCKED"
+                 LIMIT 1"
             );
             $statement->execute($collectorKeys);
             $schedule = $statement->fetch();
@@ -160,6 +159,7 @@ final class DiscountCollectorScheduleRepository
                      next_run_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL {$staleAfterMinutes} MINUTE)
                  WHERE id = :id
                    AND enabled = 1
+                   AND (next_run_at IS NULL OR next_run_at <= UTC_TIMESTAMP())
                    AND (
                        last_status <> 'running'
                        OR last_started_at IS NULL

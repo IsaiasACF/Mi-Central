@@ -159,7 +159,7 @@ final class ExpenseRecurringAdjustmentRepository
      */
     public function listForServiceForUser(int $userId, int $serviceId): array
     {
-        $statement = $this->pdo->prepare($this->selectSql() . '
+        $statement = $this->pdo->prepare($this->selectSqlWithService() . '
              INNER JOIN expense_recurring_rules rules
                 ON rules.id = adjustments.recurring_rule_id
              WHERE adjustments.user_id = :user_id
@@ -171,6 +171,45 @@ final class ExpenseRecurringAdjustmentRepository
         ]);
 
         return $statement->fetchAll();
+    }
+
+    /**
+     * @param array<int, int> $serviceIds
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    public function listForServicesForUser(int $userId, array $serviceIds): array
+    {
+        $serviceIds = array_values(array_unique(array_filter(
+            array_map('intval', $serviceIds),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        if ($serviceIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($serviceIds), '?'));
+        $statement = $this->pdo->prepare($this->selectSql() . '
+             INNER JOIN expense_recurring_rules rules
+                ON rules.id = adjustments.recurring_rule_id
+             WHERE adjustments.user_id = ?
+               AND rules.service_id IN (' . $placeholders . ')
+             ORDER BY rules.service_id ASC, adjustments.period_month ASC, adjustments.id ASC');
+        $statement->execute(array_merge([$userId], $serviceIds));
+        $grouped = [];
+
+        foreach ($statement->fetchAll() as $row) {
+            $serviceId = (int) ($row['service_id'] ?? 0);
+
+            if ($serviceId <= 0) {
+                continue;
+            }
+
+            unset($row['service_id']);
+            $grouped[$serviceId][] = $row;
+        }
+
+        return $grouped;
     }
 
     public function deleteForUser(int $userId, int $adjustmentId): bool
@@ -233,6 +272,21 @@ final class ExpenseRecurringAdjustmentRepository
     private function selectSql(): string
     {
         return 'SELECT adjustments.id, adjustments.user_id, adjustments.recurring_rule_id,
+                    adjustments.period_month, adjustments.action, adjustments.description,
+                    adjustments.amount_override, adjustments.amount_clp, adjustments.due_on,
+                    adjustments.category_id, categories.name AS category_name,
+                    adjustments.payment_method_id, payment_methods.name AS payment_method_name,
+                    adjustments.notes, adjustments.active, adjustments.created_at, adjustments.updated_at
+             FROM expense_recurring_adjustments adjustments
+             LEFT JOIN expense_categories categories
+                ON categories.id = adjustments.category_id
+             LEFT JOIN expense_payment_methods payment_methods
+                ON payment_methods.id = adjustments.payment_method_id';
+    }
+
+    private function selectSqlWithService(): string
+    {
+        return 'SELECT rules.service_id, adjustments.id, adjustments.user_id, adjustments.recurring_rule_id,
                     adjustments.period_month, adjustments.action, adjustments.description,
                     adjustments.amount_override, adjustments.amount_clp, adjustments.due_on,
                     adjustments.category_id, categories.name AS category_name,

@@ -8,6 +8,8 @@ final class DiscountCompatibilityService
     public const STATUS_GENERAL = 'general';
     public const STATUS_COMPATIBLE = 'compatible';
     public const STATUS_INCOMPATIBLE = 'incompatible';
+    /** @var array<int, array<int, array<string, mixed>>> */
+    private array $activeUserBenefitsByUser = [];
 
     public function __construct(
         private readonly DiscountPromotionRepository $promotions,
@@ -23,6 +25,14 @@ final class DiscountCompatibilityService
         $benefits = $this->activeUserBenefitsByProgram($userId);
 
         return array_values(array_map('intval', array_keys($benefits)));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $benefits
+     */
+    public function primeActiveUserBenefits(int $userId, array $benefits): void
+    {
+        $this->activeUserBenefitsByUser[$userId] = $this->indexActiveUserBenefits($benefits);
     }
 
     /**
@@ -58,7 +68,9 @@ final class DiscountCompatibilityService
         $evaluated = [];
 
         foreach ($promotions as $promotion) {
-            $promotion['compatibility'] = $this->evaluateRequirements($requirementsByPromotion[(int) $promotion['id']] ?? [], $userBenefits);
+            $requirements = $requirementsByPromotion[(int) $promotion['id']] ?? [];
+            $promotion['benefits'] = $requirements;
+            $promotion['compatibility'] = $this->evaluateRequirements($requirements, $userBenefits);
             $evaluated[] = $promotion;
         }
 
@@ -166,7 +178,19 @@ final class DiscountCompatibilityService
      */
     private function activeUserBenefitsByProgram(int $userId): array
     {
-        $rows = $this->userBenefits->listForUser($userId, ['active' => true]);
+        if (array_key_exists($userId, $this->activeUserBenefitsByUser)) {
+            return $this->activeUserBenefitsByUser[$userId];
+        }
+
+        return $this->indexActiveUserBenefits($this->userBenefits->listForUser($userId, ['active' => true]));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function indexActiveUserBenefits(array $rows): array
+    {
         $benefits = [];
 
         foreach ($rows as $row) {

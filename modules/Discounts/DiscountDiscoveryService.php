@@ -144,13 +144,17 @@ final class DiscountDiscoveryService
 
         $promotionIds = array_map(static fn (array $promotion): int => (int) $promotion['id'], $promotions);
         $weekdaysByPromotion = $this->promotions->listWeekdaysForPromotions($promotionIds);
-        $requirementsByPromotion = $this->promotions->listBenefitsForPromotions($promotionIds);
+        $requirementsByPromotion = $this->promotionsHaveBenefits($promotions)
+            ? []
+            : $this->promotions->listBenefitsForPromotions($promotionIds);
         $favoriteIds = array_fill_keys($this->promotions->listFavoriteIdsForUser($userId), true);
 
         foreach ($promotions as &$promotion) {
             $promotionId = (int) $promotion['id'];
             $promotion['weekdays'] = $weekdaysByPromotion[$promotionId] ?? [];
-            $promotion['benefits'] = $requirementsByPromotion[$promotionId] ?? [];
+            $promotion['benefits'] = is_array($promotion['benefits'] ?? null)
+                ? $promotion['benefits']
+                : ($requirementsByPromotion[$promotionId] ?? []);
             $promotion['is_favorite'] = isset($favoriteIds[$promotionId]);
             $promotion['discount_label'] = DiscountPromotionFormat::discountLabel($promotion);
             $promotion['validity_label'] = DiscountPromotionFormat::validityLabel($promotion);
@@ -160,6 +164,20 @@ final class DiscountDiscoveryService
         unset($promotion);
 
         return $promotions;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $promotions
+     */
+    private function promotionsHaveBenefits(array $promotions): bool
+    {
+        foreach ($promotions as $promotion) {
+            if (!array_key_exists('benefits', $promotion) || !is_array($promotion['benefits'])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -191,6 +209,8 @@ final class DiscountDiscoveryService
         if (is_string($filters['state'] ?? null)) {
             $normalized['state'] = (string) $filters['state'];
         }
+
+        $normalized['today'] = date('Y-m-d');
 
         if (is_string($filters['collector_key'] ?? null) && preg_match('/\A[a-z0-9_\\-]+\z/', (string) $filters['collector_key']) === 1) {
             $normalized['collector_key'] = (string) $filters['collector_key'];

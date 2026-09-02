@@ -97,6 +97,7 @@ return static function (\PDO $pdo): void {
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX user_schedule_entries_user_weekday_index (user_id, weekday),
+            UNIQUE KEY user_schedule_entries_id_user_unique (id, user_id),
             CONSTRAINT user_schedule_entries_user_fk
                 FOREIGN KEY (user_id) REFERENCES users (id)
                 ON DELETE CASCADE,

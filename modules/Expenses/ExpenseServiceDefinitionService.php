@@ -73,11 +73,17 @@ final class ExpenseServiceDefinitionService
      */
     public function list(int $userId, bool $activeOnly = false): array
     {
+        $services = $this->services->listForUser($userId, $activeOnly);
+        $paymentMethodsByService = $this->services->paymentMethodsForServices(
+            $userId,
+            array_map(static fn (array $service): int => (int) $service['id'], $services),
+        );
+
         return array_map(
             fn (array $service): array => $this->withRecurringRule($service + [
-                'payment_methods' => $this->services->paymentMethodsForService($userId, (int) $service['id']),
+                'payment_methods' => $paymentMethodsByService[(int) $service['id']] ?? [],
             ]),
-            $this->services->listForUser($userId, $activeOnly),
+            $services,
         );
     }
 

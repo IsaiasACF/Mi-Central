@@ -15,6 +15,13 @@ use Modules\Video\VideoDashboardSummaryService;
 
 final class DashboardSummaryService
 {
+    /** @var array<int, array<string, mixed>>|null */
+    private ?array $pendingTasks = null;
+    /** @var array<int, array<string, mixed>>|null */
+    private ?array $pendingInboxTasks = null;
+    /** @var array<int, array<string, mixed>>|null */
+    private ?array $upcomingReminders = null;
+
     public function __construct(
         private readonly array $appConfig,
         private readonly ?TaskService $taskService = null,
@@ -241,8 +248,9 @@ final class DashboardSummaryService
         for ($offset = 0; $offset < 7; $offset++) {
             $day = $todayStart->modify('+' . $offset . ' days');
             $date = $day->format('Y-m-d');
+            $individual = $this->coincidenceService->getCoincidencesForDate($this->userId, $date);
 
-            foreach ($this->coincidenceService->getGroupCoincidencesForDate($this->userId, $date) as $group) {
+            foreach ($this->coincidenceService->groupCoincidences($individual) as $group) {
                 $startMinutes = $this->timeToMinutes($group['starts_at'] ?? null);
                 $endMinutes = $this->timeToMinutes($group['ends_at'] ?? null);
 
@@ -269,7 +277,7 @@ final class DashboardSummaryService
                 ];
             }
 
-            foreach ($this->coincidenceService->getCoincidencesForDate($this->userId, $date) as $item) {
+            foreach ($individual as $item) {
                 $startMinutes = $this->timeToMinutes($item['starts_at'] ?? null);
                 $endMinutes = $this->timeToMinutes($item['ends_at'] ?? null);
 
@@ -314,10 +322,14 @@ final class DashboardSummaryService
             return [];
         }
 
-        return $this->taskService->list($this->userId, [
-            'space_id' => 'none',
-            'status' => 'pending',
-        ]);
+        if ($this->pendingInboxTasks === null) {
+            $this->pendingInboxTasks = $this->taskService->list($this->userId, [
+                'space_id' => 'none',
+                'status' => 'pending',
+            ]);
+        }
+
+        return $this->pendingInboxTasks;
     }
 
     /**
@@ -361,7 +373,7 @@ final class DashboardSummaryService
         $now = DateTimeHelper::nowLocal($this->timezone());
         $items = [];
 
-        foreach ($this->taskService->list($this->userId, ['status' => 'pending']) as $task) {
+        foreach ($this->pendingTasks() as $task) {
             foreach ($this->taskOccurrences($task, $timezone) as $occurrence) {
                 $date = $occurrence['date'];
 
@@ -382,6 +394,22 @@ final class DashboardSummaryService
     }
 
     /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function pendingTasks(): array
+    {
+        if ($this->taskService === null || $this->userId === null) {
+            return [];
+        }
+
+        if ($this->pendingTasks === null) {
+            $this->pendingTasks = $this->taskService->list($this->userId, ['status' => 'pending']);
+        }
+
+        return $this->pendingTasks;
+    }
+
+    /**
      * @return array<int, array{sort: string, label: string}>
      */
     private function datedReminderItems(DateTimeImmutable $rangeStart, DateTimeImmutable $rangeEnd, bool $futureOnly): array
@@ -393,12 +421,7 @@ final class DashboardSummaryService
         $timezone = DateTimeHelper::timezone($this->timezone());
         $now = DateTimeHelper::nowLocal($this->timezone());
         $items = [];
-        $reminders = $this->reminderService->list($this->userId, [
-            'status' => 'pending',
-            'remind_from' => $rangeStart->format('Y-m-d H:i:s'),
-            'remind_before' => $rangeEnd->format('Y-m-d H:i:s'),
-            'limit' => 20,
-        ]);
+        $reminders = $this->dashboardReminders($rangeStart, $rangeEnd);
 
         foreach ($reminders as $reminder) {
             $date = new DateTimeImmutable((string) ($reminder['occurrence_at_local'] ?? $reminder['remind_at_local']), $timezone);
@@ -417,6 +440,45 @@ final class DashboardSummaryService
         }
 
         return $items;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function dashboardReminders(DateTimeImmutable $rangeStart, DateTimeImmutable $rangeEnd): array
+    {
+        if ($this->reminderService === null || $this->userId === null) {
+            return [];
+        }
+
+        if ($this->upcomingReminders === null) {
+            $timezone = DateTimeHelper::timezone($this->timezone());
+            $base = DateTimeHelper::nowLocal($this->timezone())->setTimezone($timezone)->setTime(0, 0, 0);
+            $this->upcomingReminders = $this->reminderService->list($this->userId, [
+                'status' => 'pending',
+                'remind_from' => $base->format('Y-m-d H:i:s'),
+                'remind_before' => $base->modify('+31 days')->format('Y-m-d H:i:s'),
+            ]);
+        }
+
+        return array_values(array_filter(
+            $this->upcomingReminders,
+            static function (array $reminder) use ($rangeStart, $rangeEnd): bool {
+                $value = (string) ($reminder['occurrence_at_local'] ?? $reminder['remind_at_local'] ?? '');
+
+                if ($value === '') {
+                    return false;
+                }
+
+                try {
+                    $date = new DateTimeImmutable($value, $rangeStart->getTimezone());
+                } catch (\Throwable) {
+                    return false;
+                }
+
+                return $date >= $rangeStart && $date < $rangeEnd;
+            },
+        ));
     }
 
     /**

@@ -21,6 +21,17 @@ final class FriendScheduleService
         'sunday' => 7,
     ];
 
+    /** @var array<string, array<int, array<string, mixed>>> */
+    private array $userEntriesCache = [];
+    /** @var array<string, array<int, array<string, mixed>>> */
+    private array $friendEntriesCache = [];
+    /** @var array<string, array<int, array<string, mixed>>> */
+    private array $userExceptionsCache = [];
+    /** @var array<string, array<int, array<string, mixed>>> */
+    private array $friendExceptionsCache = [];
+    /** @var array<string, bool> */
+    private array $friendOwnershipCache = [];
+
     public function __construct(private readonly FriendScheduleRepository $repository)
     {
     }
@@ -66,6 +77,7 @@ final class FriendScheduleService
 
         $data = $this->scheduleEntryData($input);
         $entryId = $this->repository->createFriendScheduleEntry($friendId, $data);
+        $this->clearReadCaches();
         $entry = $this->repository->findFriendScheduleEntryForUser($userId, $entryId);
 
         return $entry === null ? [] : $this->annotateEntry($entry, 'friend', $userId, $friendId);
@@ -78,7 +90,7 @@ final class FriendScheduleService
     {
         $friendId = $this->positiveId($friendId, 'friend_id');
 
-        return $this->annotateEntries($this->repository->listFriendScheduleEntries($userId, $friendId), 'friend', $userId, $friendId);
+        return $this->annotateEntries($this->friendEntries($userId, $friendId, null), 'friend', $userId, $friendId);
     }
 
     /**
@@ -124,6 +136,7 @@ final class FriendScheduleService
         ];
 
         $exceptionId = $this->repository->createFriendScheduleException($friendId, $data);
+        $this->clearReadCaches();
 
         foreach ($this->repository->listFriendScheduleExceptions($userId, $friendId) as $exception) {
             if ((int) $exception['id'] === $exceptionId) {
@@ -140,7 +153,7 @@ final class FriendScheduleService
     public function listFriendScheduleExceptions(int $userId, int $friendId): array
     {
         return $this->annotateExceptions(
-            $this->repository->listFriendScheduleExceptions($userId, $this->positiveId($friendId, 'friend_id')),
+            $this->friendExceptions($userId, $this->positiveId($friendId, 'friend_id'), null),
             'friend'
         );
     }
@@ -154,16 +167,16 @@ final class FriendScheduleService
         $date = $this->normalizeDate($date, 'date');
 
         if ($targetType === 'user') {
-            return $this->annotateExceptions($this->repository->listUserScheduleExceptionsForDate($userId, $date), 'user');
+            return $this->annotateExceptions($this->userExceptions($userId, $date), 'user');
         }
 
         $friendId = $this->requiredFriendId($friendId);
 
-        if (!$this->repository->friendBelongsToUser($userId, $friendId)) {
+        if (!$this->friendBelongsToUser($userId, $friendId)) {
             throw new FriendValidationException('Amigo invalido.');
         }
 
-        return $this->annotateExceptions($this->repository->listFriendScheduleExceptionsForDate($userId, $friendId, $date), 'friend');
+        return $this->annotateExceptions($this->friendExceptions($userId, $friendId, $date), 'friend');
     }
 
     /**
@@ -173,6 +186,7 @@ final class FriendScheduleService
     public function createUserScheduleEntry(int $userId, array $input): array
     {
         $entryId = $this->repository->createUserScheduleEntry($userId, $this->scheduleEntryData($input));
+        $this->clearReadCaches();
 
         foreach ($this->repository->listUserScheduleEntries($userId) as $entry) {
             if ((int) $entry['id'] === $entryId) {
@@ -188,7 +202,7 @@ final class FriendScheduleService
      */
     public function listUserScheduleEntries(int $userId): array
     {
-        return $this->annotateEntries($this->repository->listUserScheduleEntries($userId), 'user', $userId, null);
+        return $this->annotateEntries($this->userEntries($userId, null), 'user', $userId, null);
     }
 
     /**
@@ -196,7 +210,7 @@ final class FriendScheduleService
      */
     public function listUserScheduleExceptions(int $userId): array
     {
-        return $this->annotateExceptions($this->repository->listUserScheduleExceptions($userId), 'user');
+        return $this->annotateExceptions($this->userExceptions($userId, null), 'user');
     }
 
     /**
@@ -207,11 +221,10 @@ final class FriendScheduleService
     {
         $targetType = $this->targetType($targetType);
         $date = $this->activeDate($filters);
-        $queryFilters = $date === null ? [] : ['date' => $date];
 
         if ($targetType === 'user') {
             return $this->annotateEntries(
-                $this->repository->listUserScheduleEntriesFiltered($userId, $queryFilters),
+                $this->userEntries($userId, $date),
                 'user',
                 $userId,
                 null
@@ -220,12 +233,12 @@ final class FriendScheduleService
 
         $friendId = $this->requiredFriendId($friendId);
 
-        if (!$this->repository->friendBelongsToUser($userId, $friendId)) {
+        if (!$this->friendBelongsToUser($userId, $friendId)) {
             throw new FriendValidationException('Amigo invalido.');
         }
 
         return $this->annotateEntries(
-            $this->repository->listFriendScheduleEntriesFiltered($userId, $friendId, $queryFilters),
+            $this->friendEntries($userId, $friendId, $date),
             'friend',
             $userId,
             $friendId
@@ -263,6 +276,7 @@ final class FriendScheduleService
             }
 
             $this->repository->updateUserScheduleEntry($userId, $entryId, $data);
+            $this->clearReadCaches();
             $entry = $this->repository->findUserScheduleEntryForUser($userId, $entryId);
 
             return $entry === null ? null : $this->annotateEntry($entry, 'user', $userId, null);
@@ -279,6 +293,7 @@ final class FriendScheduleService
         }
 
         $this->repository->updateFriendScheduleEntry($userId, $entryId, $data);
+        $this->clearReadCaches();
         $updated = $this->repository->findFriendScheduleEntryForUser($userId, $entryId);
 
         return $updated === null ? null : $this->annotateEntry($updated, 'friend', $userId, (int) $updated['friend_id']);
@@ -290,10 +305,16 @@ final class FriendScheduleService
         $entryId = $this->positiveId($entryId, 'id');
 
         if ($targetType === 'user') {
-            return $this->repository->deleteUserScheduleEntry($userId, $entryId);
+            $deleted = $this->repository->deleteUserScheduleEntry($userId, $entryId);
+            $this->clearReadCaches();
+
+            return $deleted;
         }
 
-        return $this->repository->deleteFriendScheduleEntry($userId, $entryId);
+        $deleted = $this->repository->deleteFriendScheduleEntry($userId, $entryId);
+        $this->clearReadCaches();
+
+        return $deleted;
     }
 
     /**
@@ -307,6 +328,7 @@ final class FriendScheduleService
         if ($targetType === 'user') {
             $data = $this->exceptionData($userId, 'user', null, $input);
             $exceptionId = $this->repository->createUserScheduleException($userId, $data);
+            $this->clearReadCaches();
             $exception = $this->repository->findUserScheduleExceptionForUser($userId, $exceptionId);
 
             return $exception === null ? [] : $this->annotateException($exception, 'user');
@@ -331,6 +353,7 @@ final class FriendScheduleService
 
             $data = $this->exceptionData($userId, 'user', null, $input);
             $this->repository->updateUserScheduleException($userId, $exceptionId, $data);
+            $this->clearReadCaches();
             $exception = $this->repository->findUserScheduleExceptionForUser($userId, $exceptionId);
 
             return $exception === null ? null : $this->annotateException($exception, 'user');
@@ -350,6 +373,7 @@ final class FriendScheduleService
 
         $data = $this->exceptionData($userId, 'friend', $friendId, $input);
         $this->repository->updateFriendScheduleException($userId, $exceptionId, $data);
+        $this->clearReadCaches();
         $updated = $this->repository->findFriendScheduleExceptionForUser($userId, $exceptionId);
 
         return $updated === null ? null : $this->annotateException($updated, 'friend');
@@ -361,10 +385,16 @@ final class FriendScheduleService
         $exceptionId = $this->positiveId($exceptionId, 'id');
 
         if ($targetType === 'user') {
-            return $this->repository->deleteUserScheduleException($userId, $exceptionId);
+            $deleted = $this->repository->deleteUserScheduleException($userId, $exceptionId);
+            $this->clearReadCaches();
+
+            return $deleted;
         }
 
-        return $this->repository->deleteFriendScheduleException($userId, $exceptionId);
+        $deleted = $this->repository->deleteFriendScheduleException($userId, $exceptionId);
+        $this->clearReadCaches();
+
+        return $deleted;
     }
 
     /**
@@ -772,8 +802,8 @@ final class FriendScheduleService
         $endsAt = (string) ($entry['ends_at'] ?? '');
         $entryId = (int) ($entry['id'] ?? 0);
         $entries = $targetType === 'user'
-            ? $this->repository->listUserScheduleEntries($userId)
-            : $this->repository->listFriendScheduleEntries($userId, $this->requiredFriendId($friendId));
+            ? $this->userEntries($userId, null)
+            : $this->friendEntries($userId, $this->requiredFriendId($friendId), null);
 
         foreach ($entries as $other) {
             if ((int) $other['id'] === $entryId || (int) $other['weekday'] !== $weekday) {
@@ -790,6 +820,129 @@ final class FriendScheduleService
         }
 
         return [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function userEntries(int $userId, ?string $date): array
+    {
+        $key = $this->cacheKey($userId, null, $date);
+
+        if (!array_key_exists($key, $this->userEntriesCache)) {
+            $this->userEntriesCache[$key] = $date === null
+                ? $this->repository->listUserScheduleEntries($userId)
+                : $this->activeEntriesForDate($this->userEntries($userId, null), $date);
+        }
+
+        return $this->userEntriesCache[$key];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function friendEntries(int $userId, int $friendId, ?string $date): array
+    {
+        $key = $this->cacheKey($userId, $friendId, $date);
+
+        if (!array_key_exists($key, $this->friendEntriesCache)) {
+            $this->friendEntriesCache[$key] = $date === null
+                ? $this->repository->listFriendScheduleEntries($userId, $friendId)
+                : $this->activeEntriesForDate($this->friendEntries($userId, $friendId, null), $date);
+        }
+
+        return $this->friendEntriesCache[$key];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function userExceptions(int $userId, ?string $date): array
+    {
+        $key = $this->cacheKey($userId, null, $date);
+
+        if (!array_key_exists($key, $this->userExceptionsCache)) {
+            $this->userExceptionsCache[$key] = $date === null
+                ? $this->repository->listUserScheduleExceptions($userId)
+                : $this->exceptionsForDate($this->userExceptions($userId, null), $date);
+        }
+
+        return $this->userExceptionsCache[$key];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function friendExceptions(int $userId, int $friendId, ?string $date): array
+    {
+        $key = $this->cacheKey($userId, $friendId, $date);
+
+        if (!array_key_exists($key, $this->friendExceptionsCache)) {
+            $this->friendExceptionsCache[$key] = $date === null
+                ? $this->repository->listFriendScheduleExceptions($userId, $friendId)
+                : $this->exceptionsForDate($this->friendExceptions($userId, $friendId, null), $date);
+        }
+
+        return $this->friendExceptionsCache[$key];
+    }
+
+    private function friendBelongsToUser(int $userId, int $friendId): bool
+    {
+        $key = $this->cacheKey($userId, $friendId, null);
+
+        if (!array_key_exists($key, $this->friendOwnershipCache)) {
+            $this->friendOwnershipCache[$key] = $this->repository->friendBelongsToUser($userId, $friendId);
+        }
+
+        return $this->friendOwnershipCache[$key];
+    }
+
+    private function cacheKey(int $userId, ?int $friendId, ?string $date): string
+    {
+        return $userId . ':' . ($friendId === null ? 'user' : 'friend:' . $friendId) . ':' . ($date ?? 'all');
+    }
+
+    private function clearReadCaches(): void
+    {
+        $this->userEntriesCache = [];
+        $this->friendEntriesCache = [];
+        $this->userExceptionsCache = [];
+        $this->friendExceptionsCache = [];
+        $this->friendOwnershipCache = [];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $entries
+     * @return array<int, array<string, mixed>>
+     */
+    private function activeEntriesForDate(array $entries, string $date): array
+    {
+        return array_values(array_filter($entries, static function (array $entry) use ($date): bool {
+            $validFrom = $entry['valid_from'] ?? null;
+            $validUntil = $entry['valid_until'] ?? null;
+
+            if (is_string($validFrom) && $validFrom !== '' && $validFrom > $date) {
+                return false;
+            }
+
+            if (is_string($validUntil) && $validUntil !== '' && $validUntil < $date) {
+                return false;
+            }
+
+            return true;
+        }));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $exceptions
+     * @return array<int, array<string, mixed>>
+     */
+    private function exceptionsForDate(array $exceptions, string $date): array
+    {
+        return array_values(array_filter(
+            $exceptions,
+            static fn (array $exception): bool => (string) ($exception['exception_date'] ?? '') === $date
+        ));
     }
 
     /**

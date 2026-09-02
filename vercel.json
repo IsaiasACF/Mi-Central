@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "Dockerfile.vercel",
+      "use": "@vercel/docker"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/video/(.*)",
+      "status": 404
+    },
+    {
+      "src": "/api/jobs",
+      "dest": "/public/api/jobs.php"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/public/api/$1.php"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/public/$1"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/jobs?job=process-reminders",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

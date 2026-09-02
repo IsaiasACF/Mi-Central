@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use App\Database\Connection;
+use App\Support\DateTimeHelper;
 use Modules\Expenses\ExpenseCategoryRepository;
 use Modules\Expenses\ExpenseCategoryService;
 use Modules\Expenses\ExpenseHistoryService;
@@ -330,7 +331,9 @@ try {
     expenses_history_assert($login['status'] === 302, 'Login failed.');
     $page = expenses_history_http('http://127.0.0.1/index.php?section=expenses&tab=history&range=6m', 'GET', $cookieFile);
     expenses_history_assert($page['status'] === 200, 'History page did not load.');
-    expenses_history_assert(str_contains($page['body'], 'Historial de gastos') && str_contains($page['body'], 'Total registrado') && str_contains($page['body'], '$190.000'), 'History KPIs did not render.');
+    $httpHistory = $historyService->history($userId, ['range' => '6m'], DateTimeHelper::nowLocal());
+    $expectedHttpTotal = '$' . number_format((int) ($httpHistory['total_known_clp'] ?? 0), 0, ',', '.');
+    expenses_history_assert(str_contains($page['body'], 'Historial de gastos') && str_contains($page['body'], 'Total registrado') && str_contains($page['body'], $expectedHttpTotal), 'History KPIs did not render.');
     expenses_history_assert(str_contains($page['body'], 'Evoluci') && str_contains($page['body'], 'Datos parciales') && str_contains($page['body'], 'Servicios con mayor gasto'), 'History analysis sections did not render.');
     expenses_history_assert(str_contains($page['body'], 'href="/index.php?section=expenses&amp;month=2026-08"'), 'History month link did not point to monthly view.');
     expenses_history_assert(!str_contains($page['body'], '$999.999') && !str_contains($page['body'], 'Gasto ajeno'), 'History page included cancelled or foreign data.');

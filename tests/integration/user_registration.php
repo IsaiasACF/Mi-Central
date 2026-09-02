@@ -24,6 +24,53 @@ $password = 'test-secret-' . bin2hex(random_bytes(8));
 $cookieFiles = [];
 $exitCode = 1;
 
+function reg_cleanup_test_users(PDO $pdo, string $prefix): void
+{
+    $pdo->exec('DELETE os FROM organization_spaces os LEFT JOIN users u ON u.id = os.user_id WHERE u.id IS NULL');
+    $pdo->prepare('DELETE FROM organization_spaces WHERE user_id IN (SELECT id FROM users WHERE username LIKE :prefix)')
+        ->execute(['prefix' => $prefix . '%']);
+    $pdo->prepare('DELETE FROM organization_tasks WHERE user_id IN (SELECT id FROM users WHERE username LIKE :prefix)')
+        ->execute(['prefix' => $prefix . '%']);
+    $pdo->prepare('DELETE FROM friends WHERE user_id IN (SELECT id FROM users WHERE username LIKE :prefix)')
+        ->execute(['prefix' => $prefix . '%']);
+    $pdo->prepare('DELETE FROM video_files WHERE user_id IN (SELECT id FROM users WHERE username LIKE :prefix)')
+        ->execute(['prefix' => $prefix . '%']);
+    $pdo->prepare('DELETE FROM user_discount_benefits WHERE user_id IN (SELECT id FROM users WHERE username LIKE :prefix)')
+        ->execute(['prefix' => $prefix . '%']);
+    $pdo->prepare('DELETE FROM login_attempts WHERE username LIKE :prefix OR username = :register_user')
+        ->execute(['prefix' => $prefix . '%', 'register_user' => '_register']);
+    $pdo->prepare('DELETE FROM users WHERE username LIKE :prefix')
+        ->execute(['prefix' => $prefix . '%']);
+}
+
+function reg_ensure_user(PDO $pdo, AuthService $auth, string $username, string $password): int
+{
+    $normalized = AuthService::normalizeUsername($username);
+    $statement = $pdo->prepare('SELECT id FROM users WHERE username = :username LIMIT 1');
+    $statement->execute(['username' => $normalized]);
+    $existingId = $statement->fetchColumn();
+
+    if (is_numeric($existingId) && (int) $existingId > 0) {
+        return (int) $existingId;
+    }
+
+    $newId = $auth->createUser($username, $password);
+
+    if ($newId <= 0) {
+        $refetch = $pdo->prepare('SELECT id FROM users WHERE username = :username LIMIT 1');
+        $refetch->execute(['username' => $normalized]);
+        $refetched = $refetch->fetchColumn();
+
+        if (!is_numeric($refetched) || (int) $refetched <= 0) {
+            throw new RuntimeException('User could not be created or recovered: ' . $username);
+        }
+
+        return (int) $refetched;
+    }
+
+    return $newId;
+}
+
 function reg_request(string $url, string $method = 'GET', array $postFields = [], ?string $cookieFile = null): array
 {
     $handle = curl_init($url);
@@ -138,12 +185,13 @@ function reg_count(PDO $pdo, string $sql, array $params): int
 }
 
 try {
+    reg_cleanup_test_users($pdo, $prefix);
     $pdo->prepare("DELETE FROM login_attempts WHERE username = '_register' AND ip_address = :ip")
         ->execute(['ip' => '127.0.0.1']);
 
-    $adminId = $auth->createUser($adminUsername, $password);
-    $normalId = $auth->createUser($normalUsername, $password);
-    $existingId = $auth->createUser($existingUsername, $password);
+    $adminId = reg_ensure_user($pdo, $auth, $adminUsername, $password);
+    $normalId = reg_ensure_user($pdo, $auth, $normalUsername, $password);
+    $existingId = reg_ensure_user($pdo, $auth, $existingUsername, $password);
     $pdo->prepare('UPDATE users SET is_admin = 1 WHERE id = :id')->execute(['id' => $adminId]);
 
     $seed = require dirname(__DIR__, 2) . '/database/seeds/202608080001_seed_organization_spaces.php';
@@ -323,6 +371,7 @@ try {
         }
     }
 
+    reg_cleanup_test_users($pdo, $prefix);
     $pdo->prepare("DELETE FROM login_attempts WHERE username LIKE :prefix OR username = '_register'")
         ->execute(['prefix' => $prefix . '%']);
     $pdo->prepare('DELETE FROM users WHERE username LIKE :prefix')

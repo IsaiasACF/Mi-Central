@@ -380,4 +380,45 @@ final class ExpenseServiceRepository
 
         return $statement->fetchAll();
     }
+
+    /**
+     * @param array<int, int> $serviceIds
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    public function paymentMethodsForServices(int $userId, array $serviceIds): array
+    {
+        $serviceIds = array_values(array_unique(array_filter(
+            array_map('intval', $serviceIds),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        if ($serviceIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($serviceIds), '?'));
+        $statement = $this->pdo->prepare(
+            'SELECT pivot.service_id, methods.id, methods.user_id, methods.name, methods.type, methods.institution_name,
+                    methods.notes, methods.active, pivot.is_default, pivot.created_at AS linked_at
+             FROM expense_service_payment_methods pivot
+             INNER JOIN expense_services services
+                ON services.id = pivot.service_id
+             INNER JOIN expense_payment_methods methods
+                ON methods.id = pivot.payment_method_id
+             WHERE pivot.service_id IN (' . $placeholders . ')
+               AND services.user_id = ?
+               AND methods.user_id = ?
+             ORDER BY pivot.service_id ASC, pivot.is_default DESC, methods.name ASC, methods.id ASC'
+        );
+        $statement->execute(array_merge($serviceIds, [$userId, $userId]));
+        $grouped = [];
+
+        foreach ($statement->fetchAll() as $row) {
+            $serviceId = (int) $row['service_id'];
+            unset($row['service_id']);
+            $grouped[$serviceId][] = $row;
+        }
+
+        return $grouped;
+    }
 }

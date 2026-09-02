@@ -292,6 +292,14 @@ $username = is_array($user) ? (string) $user['username'] : '';
 $userId = is_array($user) ? (int) ($user['user_id'] ?? 0) : 0;
 $section = is_string($_GET['section'] ?? null) ? $_GET['section'] : null;
 
+$videoEnabled = filter_var(getenv('VIDEO_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN);
+
+if ($videoEnabled === false && is_string($section) && str_starts_with($section, 'video')) {
+    http_response_code(404);
+    echo 'Video no disponible en este entorno.';
+    exit;
+}
+
 if (in_array($section, [
     'discounts-for-me',
     'discounts-today',
@@ -1026,6 +1034,7 @@ if (is_array($page) && $page['key'] === 'discounts') {
         'state' => is_string($_GET['state'] ?? null) ? (string) $_GET['state'] : 'available',
     ];
     $discountUserBenefits = $userBenefitService->listActive($userId);
+    $compatibilityService->primeActiveUserBenefits($userId, $discountUserBenefits);
     $discountUserBenefitCount = count($discountUserBenefits);
     $discountBenefitPrograms = $programService->listActive();
     $discountMerchants = $merchantService->listActive();
@@ -1066,22 +1075,37 @@ if (is_array($page) && $page['key'] === 'expenses') {
     $configurationTab = in_array($expensesTab, $configurationTabs, true) ? $expensesTab : 'categories';
 
     $expenseServices = $serviceDefinitionService->list($userId);
-    $activeExpenseServices = $serviceDefinitionService->list($userId, true);
+    $activeExpenseServices = array_values(array_filter(
+        $expenseServices,
+        static fn (array $service): bool => (int) ($service['active'] ?? 0) === 1,
+    ));
+    $recurringAdjustmentsByService = $recurringAdjustmentService->listForServices(
+        $userId,
+        array_map(static fn (array $service): int => (int) ($service['id'] ?? 0), $expenseServices),
+    );
 
     foreach ($expenseServices as $index => $service) {
-        $expenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentService->listForService($userId, (int) ($service['id'] ?? 0));
+        $expenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentsByService[(int) ($service['id'] ?? 0)] ?? [];
     }
 
     foreach ($activeExpenseServices as $index => $service) {
-        $activeExpenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentService->listForService($userId, (int) ($service['id'] ?? 0));
+        $activeExpenseServices[$index]['recurring_adjustments'] = $recurringAdjustmentsByService[(int) ($service['id'] ?? 0)] ?? [];
     }
 
+    $expenseCategories = $categoryService->list($userId);
+    $expensePaymentMethods = $paymentMethodService->list($userId);
     $expensesConfiguration = [
         'active_tab' => $configurationTab,
-        'categories' => $categoryService->list($userId),
-        'active_categories' => $categoryService->list($userId, true),
-        'payment_methods' => $paymentMethodService->list($userId),
-        'active_payment_methods' => $paymentMethodService->list($userId, true),
+        'categories' => $expenseCategories,
+        'active_categories' => array_values(array_filter(
+            $expenseCategories,
+            static fn (array $category): bool => (int) ($category['active'] ?? 0) === 1,
+        )),
+        'payment_methods' => $expensePaymentMethods,
+        'active_payment_methods' => array_values(array_filter(
+            $expensePaymentMethods,
+            static fn (array $method): bool => (int) ($method['active'] ?? 0) === 1,
+        )),
         'services' => $expenseServices,
         'active_services' => $activeExpenseServices,
         'payment_method_type_labels' => $expensesConfiguration['payment_method_type_labels'],

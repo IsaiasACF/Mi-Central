@@ -29,9 +29,7 @@ return static function (\PDO $pdo): void {
                 FOREIGN KEY (project_id) REFERENCES organization_projects (id)
                 ON DELETE CASCADE,
             CONSTRAINT organization_reminders_status_check
-                CHECK (status IN ('pending', 'dismissed', 'completed')),
-            CONSTRAINT organization_reminders_single_target_check
-                CHECK (task_id IS NULL OR project_id IS NULL)
+                CHECK (status IN ('pending', 'dismissed', 'completed'))
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
 };

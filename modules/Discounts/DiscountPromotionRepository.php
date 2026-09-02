@@ -511,6 +511,8 @@ final class DiscountPromotionRepository
             $where[] = 'p.is_active = 1';
         }
 
+        $this->addStateFilter($where, $params, $filters['state'] ?? null, $filters['today'] ?? null);
+
         if (isset($filters['channel']) && in_array($filters['channel'], ['in_store', 'online', 'both'], true)) {
             if ($filters['channel'] === 'in_store') {
                 $where[] = 'p.channel IN ("in_store", "both")';
@@ -952,6 +954,42 @@ final class DiscountPromotionRepository
         }
 
         $where[] = 'p.category IN (' . implode(', ', $placeholders) . ')';
+    }
+
+    /**
+     * @param array<int, string> $where
+     * @param array<string, mixed> $params
+     */
+    private function addStateFilter(array &$where, array &$params, mixed $state, mixed $today): void
+    {
+        if (!is_string($state) || !is_string($today) || preg_match('/\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/', $today) !== 1) {
+            return;
+        }
+
+        if ($state === 'current') {
+            $where[] = '(p.starts_on IS NULL OR p.starts_on <= :state_today_start)';
+            $where[] = '(p.ends_on IS NULL OR p.ends_on >= :state_today_end)';
+            $params['state_today_start'] = $today;
+            $params['state_today_end'] = $today;
+            return;
+        }
+
+        if ($state === 'upcoming') {
+            $where[] = 'p.starts_on > :state_today_start';
+            $params['state_today_start'] = $today;
+            return;
+        }
+
+        if ($state === 'expired') {
+            $where[] = 'p.ends_on IS NOT NULL AND p.ends_on < :state_today_end';
+            $params['state_today_end'] = $today;
+            return;
+        }
+
+        if ($state === 'available') {
+            $where[] = '(p.ends_on IS NULL OR p.ends_on >= :state_today_end)';
+            $params['state_today_end'] = $today;
+        }
     }
 
     private function escapeLike(string $value): string

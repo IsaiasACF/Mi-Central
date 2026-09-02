@@ -74,6 +74,25 @@ final class ExpenseRecurringAdjustmentService
         return $this->adjustments->listForServiceForUser($userId, $this->positiveId($serviceId, 'service_id'));
     }
 
+    /**
+     * @param array<int, int> $serviceIds
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    public function listForServices(int $userId, array $serviceIds): array
+    {
+        $validIds = [];
+
+        foreach ($serviceIds as $serviceId) {
+            $serviceId = (int) $serviceId;
+
+            if ($serviceId > 0) {
+                $validIds[] = $serviceId;
+            }
+        }
+
+        return $this->adjustments->listForServicesForUser($userId, $validIds);
+    }
+
     public function delete(int $userId, int $adjustmentId): bool
     {
         return $this->adjustments->deleteForUser($userId, $this->positiveId($adjustmentId, 'id'));

@@ -133,10 +133,12 @@ final class ExpenseService
         $items = $this->sortItems($items, $sort);
 
         $summary = $this->summary($items);
-        $monthSummaryItems = array_map(
-            fn (array $expense): array => $this->withDerivedData($expense, $today),
-            $this->expenses->listForMonth($userId, $periodMonth),
-        );
+        $monthSummaryItems = $this->hasActiveFilters($validatedFilters)
+            ? array_map(
+                fn (array $expense): array => $this->withDerivedData($expense, $today),
+                $this->expenses->listForMonth($userId, $periodMonth),
+            )
+            : $items;
         $monthSummaryItems = $this->sortItems($monthSummaryItems, 'due');
         $monthSummary = $this->summary($monthSummaryItems);
 
@@ -148,6 +150,20 @@ final class ExpenseService
             'filters' => $validatedFilters,
             'sort' => in_array($sort, ['due', 'amount', 'service', 'status'], true) ? $sort : 'due',
         ] + $monthSummary;
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     */
+    private function hasActiveFilters(array $filters): bool
+    {
+        foreach (['status', 'category_id', 'service_id', 'payment_method_id', 'search'] as $field) {
+            if (($filters[$field] ?? '') !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

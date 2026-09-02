@@ -7,6 +7,9 @@ use App\Database\Connection;
 
 final class Session
 {
+    private static ?bool $authenticated = null;
+    private static ?int $authenticatedUserId = null;
+
     public static function start(array $config): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
@@ -14,6 +17,18 @@ final class Session
         }
 
         self::configure($config);
+
+        if ((string) ($config['driver'] ?? 'file') === 'database') {
+            $handler = new DatabaseSessionHandler(
+                Connection::get(),
+                (string) ($config['table'] ?? 'sessions'),
+                (int) ($config['ttl'] ?? $config['idle_timeout'] ?? 7200),
+            );
+
+            session_set_save_handler($handler, true);
+            self::cleanupExpiredSessions();
+        }
+
         session_start();
         self::enforceIdleTimeout((int) ($config['idle_timeout'] ?? 7200), $config);
     }
@@ -32,11 +47,15 @@ final class Session
             'username' => $username,
         ];
         $_SESSION['last_activity'] = time();
+        self::$authenticated = true;
+        self::$authenticatedUserId = $userId;
     }
 
     public static function isAuthenticated(): bool
     {
         if (!isset($_SESSION['auth']['user_id'], $_SESSION['auth']['username'])) {
+            self::$authenticated = false;
+            self::$authenticatedUserId = null;
             return false;
         }
 
@@ -44,7 +63,13 @@ final class Session
 
         if ($userId <= 0) {
             unset($_SESSION['auth']);
+            self::$authenticated = false;
+            self::$authenticatedUserId = null;
             return false;
+        }
+
+        if (self::$authenticated !== null && self::$authenticatedUserId === $userId) {
+            return self::$authenticated;
         }
 
         try {
@@ -58,14 +83,20 @@ final class Session
             $statement->execute(['id' => $userId]);
 
             if ($statement->fetchColumn() !== false) {
+                self::$authenticated = true;
+                self::$authenticatedUserId = $userId;
                 return true;
             }
         } catch (\Throwable) {
             unset($_SESSION['auth']);
+            self::$authenticated = false;
+            self::$authenticatedUserId = null;
             return false;
         }
 
         unset($_SESSION['auth']);
+        self::$authenticated = false;
+        self::$authenticatedUserId = null;
         return false;
     }
 
@@ -80,6 +111,9 @@ final class Session
 
     public static function destroy(): void
     {
+        self::$authenticated = false;
+        self::$authenticatedUserId = null;
+
         if (session_status() !== PHP_SESSION_ACTIVE) {
             return;
         }
@@ -105,11 +139,24 @@ final class Session
         session_destroy();
     }
 
+    public static function cleanupExpiredSessions(): int
+    {
+        try {
+            $statement = Connection::get()->prepare('DELETE FROM sessions WHERE expires_at <= :expires_at');
+            $statement->execute(['expires_at' => date('Y-m-d H:i:s.u', time())]);
+
+            return $statement->rowCount();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
     private static function configure(array $config): void
     {
         session_name((string) ($config['name'] ?? 'mi_central_session'));
         ini_set('session.use_only_cookies', '1');
         ini_set('session.use_strict_mode', '1');
+        ini_set('session.gc_maxlifetime', (string) ((int) ($config['ttl'] ?? $config['idle_timeout'] ?? 7200)));
 
         session_set_cookie_params([
             'lifetime' => 0,

@@ -1,6 +1,14 @@
 <?php
 declare(strict_types=1);
 
+$videoEnabled = filter_var(getenv('VIDEO_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN);
+
+if ($videoEnabled === false) {
+    http_response_code(404);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('Video no disponible en este entorno.');
+}
+
 use App\Database\Connection;
 use App\Http\SecurityHeaders;
 use App\Http\Session;
