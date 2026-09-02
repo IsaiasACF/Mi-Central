@@ -1,0 +1,92 @@
+[1mdiff --git a/app/Views/layout/header.php b/app/Views/layout/header.php[m
+[1mindex 54c900d..6ee12e6 100644[m
+[1m--- a/app/Views/layout/header.php[m
+[1m+++ b/app/Views/layout/header.php[m
+[36m@@ -15,7 +15,9 @@[m [m$recentNotifications = is_array($notifications['recent'] ?? null) ? $notificatio[m
+             <span aria-hidden="true"></span>[m
+             <span aria-hidden="true"></span>[m
+         </button>[m
+[31m-        <a class="brand-link" href="/index.php"><?= View::escape($appName ?? 'Mi Central') ?></a>[m
+[32m+[m[32m        <a class="brand-link" href="/index.php">[m
+[32m+[m[32m            <img class="brand-link__logo" src="/brand/logo%20mi-central.png" alt="<?= View::escape($appName ?? 'Mi Central') ?>">[m
+[32m+[m[32m        </a>[m
+     </div>[m
+     <div class="app-header__session">[m
+         <div[m
+[1mdiff --git a/public/assets/css/app.css b/public/assets/css/app.css[m
+[1mindex b0e43dd..506ae13 100644[m
+[1m--- a/public/assets/css/app.css[m
+[1m+++ b/public/assets/css/app.css[m
+[36m@@ -150,6 +150,12 @@[m [mtextarea:focus-visible {[m
+     text-decoration: none;[m
+ }[m
+ [m
+[32m+[m[32m.brand-link__logo {[m
+[32m+[m[32m    display: block;[m
+[32m+[m[32m    width: min(11rem, 34vw);[m
+[32m+[m[32m    height: auto;[m
+[32m+[m[32m}[m
+[32m+[m
+ .session-user {[m
+     color: var(--color-muted);[m
+     font-size: 0.93rem;[m
+[36m@@ -4249,6 +4255,17 @@[m [mp {[m
+     margin-bottom: 0;[m
+ }[m
+ [m
+[32m+[m[32m.login-panel__brand {[m
+[32m+[m[32m    display: flex;[m
+[32m+[m[32m    justify-content: center;[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m.login-panel__logo {[m
+[32m+[m[32m    display: block;[m
+[32m+[m[32m    width: min(100%, 18rem);[m
+[32m+[m[32m    height: auto;[m
+[32m+[m[32m}[m
+[32m+[m
+ .login-panel form {[m
+     display: grid;[m
+     gap: var(--space-4);[m
+[1mdiff --git a/public/index.php b/public/index.php[m
+[1mindex 3e4de39..7c4356b 100644[m
+[1m--- a/public/index.php[m
+[1m+++ b/public/index.php[m
+[36m@@ -1273,6 +1273,7 @@[m [mif ($page === null) {[m
+ <head>[m
+     <meta charset="utf-8">[m
+     <meta name="viewport" content="width=device-width, initial-scale=1">[m
+[32m+[m[32m    <link rel="icon" type="image/png" href="/brand/icon%20mi-central.png">[m
+     <title><?= View::escape(($page['title'] ?? 'Seccion no encontrada') . ' - Mi Central') ?></title>[m
+     <link rel="stylesheet" href="/assets/css/app.css?v=<?= (string) (filemtime(dirname(__DIR__) . '/public/assets/css/app.css') ?: '1') ?>">[m
+ </head>[m
+[1mdiff --git a/public/login.php b/public/login.php[m
+[1mindex 22748e2..8c22a26 100644[m
+[1m--- a/public/login.php[m
+[1m+++ b/public/login.php[m
+[36m@@ -56,12 +56,15 @@[m [mif ($_SERVER['REQUEST_METHOD'] === 'POST') {[m
+ <head>[m
+     <meta charset="utf-8">[m
+     <meta name="viewport" content="width=device-width, initial-scale=1">[m
+[32m+[m[32m    <link rel="icon" type="image/png" href="/brand/icon%20mi-central.png">[m
+     <title>Ingresar - Mi Central</title>[m
+     <link rel="stylesheet" href="/assets/css/app.css?v=<?= (string) (filemtime(dirname(__DIR__) . '/public/assets/css/app.css') ?: '1') ?>">[m
+ </head>[m
+ <body class="login-page">[m
+     <main class="login-panel">[m
+[31m-        <h1>Mi Central</h1>[m
+[32m+[m[32m        <h1 class="login-panel__brand">[m
+[32m+[m[32m            <img class="login-panel__logo" src="/brand/logo%20mi-central.png" alt="Mi Central">[m
+[32m+[m[32m        </h1>[m
+         <?php if ($error !== ''): ?>[m
+             <p class="login-error" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></p>[m
+         <?php endif; ?>[m
+[1mdiff --git a/public/register.php b/public/register.php[m
+[1mindex 9c247a2..ed84e4e 100644[m
+[1m--- a/public/register.php[m
+[1m+++ b/public/register.php[m
+[36m@@ -70,6 +70,7 @@[m [mif ($_SERVER['REQUEST_METHOD'] === 'POST') {[m
+ <head>[m
+     <meta charset="utf-8">[m
+     <meta name="viewport" content="width=device-width, initial-scale=1">[m
+[32m+[m[32m    <link
