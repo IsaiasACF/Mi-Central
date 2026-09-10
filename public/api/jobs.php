@@ -35,14 +35,16 @@ $isAuthorizedForManual = (
 );
 
 if (!$isAuthorizedForCron && !$isAuthorizedForManual) {
-    // Diagnostico temporal: registrar solo presencia, longitudes y coincidencia.
+    // Diagnostico temporal: registrar presencia, longitudes, coincidencia y prefijos SHA-256.
     error_log(sprintf(
-        'JOB_SECRET configurado: %s; strlen(JOB_SECRET): %d; X-Job-Secret recibido: %s; strlen(X-Job-Secret): %d; hash_equals: %s',
+        'JOB_SECRET configurado: %s; strlen(JOB_SECRET): %d; X-Job-Secret recibido: %s; strlen(X-Job-Secret): %d; hash_equals: %s; sha256(JOB_SECRET)[0:12]: %s; sha256(X-Job-Secret)[0:12]: %s',
         $manualSecret !== '' ? 'sí' : 'no',
         strlen($manualSecret),
         $manualSecretFromHeader !== '' ? 'sí' : 'no',
         strlen($manualSecretFromHeader),
-        hash_equals($manualSecret, $manualSecretFromHeader) ? 'sí' : 'no'
+        hash_equals($manualSecret, $manualSecretFromHeader) ? 'sí' : 'no',
+        substr(hash('sha256', $manualSecret), 0, 12),
+        substr(hash('sha256', $manualSecretFromHeader), 0, 12)
     ));
     http_response_code(403);
     echo json_encode(['ok' => false, 'error' => 'Missing or invalid Authorization token.'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
