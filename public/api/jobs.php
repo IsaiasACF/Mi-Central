@@ -54,7 +54,19 @@ if (!is_file($scriptPath)) {
     exit(1);
 }
 
-$command = escapeshellarg((string) PHP_BINARY) . ' ' . escapeshellarg($scriptPath) . ' 2>&1';
+$phpBinary = (string) PHP_BINARY;
+
+if ($phpBinary === '' || !is_file($phpBinary) || !is_executable($phpBinary)) {
+    $phpBinary = '/usr/local/bin/php';
+}
+
+if (!is_file($phpBinary) || !is_executable($phpBinary)) {
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'PHP CLI binary not found or not executable (PHP_BINARY and /usr/local/bin/php).', 'job' => $job], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit(1);
+}
+
+$command = escapeshellarg($phpBinary) . ' ' . escapeshellarg($scriptPath) . ' 2>&1';
 $output = [];
 $code = 0;
 exec($command, $output, $code);
