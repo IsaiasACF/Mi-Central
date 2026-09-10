@@ -3702,7 +3702,17 @@
         });
     });
 
-    window.setInterval(refreshAll, 60000);
+    window.setInterval(function () {
+        if (document.hidden === false) {
+            refreshAll();
+        }
+    }, 300000);
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden === false) {
+            refreshAll();
+        }
+    });
 }());
 
 (function () {
