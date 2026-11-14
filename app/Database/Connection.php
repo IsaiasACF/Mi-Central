@@ -31,6 +31,7 @@ final class Connection
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => (bool) ($config['emulate_prepares'] ?? false),
+            PDO::ATTR_TIMEOUT => (int) $config['connect_timeout'],
         ];
         $sslOptions = self::sslOptions(is_array($config['ssl'] ?? null) ? $config['ssl'] : []);
 

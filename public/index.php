@@ -545,7 +545,9 @@ $notificationService = new NotificationService(
 );
 $notificationSummary = [
     'unread_count' => $notificationService->unreadCount($userId),
-    'recent' => $notificationService->list($userId, ['limit' => 5]),
+    'recent' => is_array($page) && $page['key'] === 'notifications'
+        ? []
+        : $notificationService->list($userId, ['limit' => 5]),
 ];
 
 if (is_array($page) && $page['key'] === 'settings') {
@@ -689,6 +691,9 @@ if (is_array($page) && $page['key'] === 'notifications') {
         'items' => $notificationService->list($userId, ['status' => $notificationStatus, 'limit' => 50]),
         'unread_count' => $notificationSummary['unread_count'],
     ];
+    $notificationSummary['recent'] = $notificationStatus === 'all'
+        ? array_slice($notificationsPage['items'], 0, 5)
+        : $notificationService->list($userId, ['limit' => 5]);
 }
 
 if (is_array($page) && $page['key'] === 'organization') {

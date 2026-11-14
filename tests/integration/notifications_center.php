@@ -275,6 +275,7 @@ try {
 
     $apiList = notifications_request('http://127.0.0.1/api/notifications.php?status=unread', 'GET', null, $cookieFile);
     notifications_assert($apiList['status'] === 200 && $apiList['json']['data']['unread_count'] === 1, 'Notifications API unread list failed.');
+    notifications_assert(str_contains(strtolower($apiList['headers']), 'no-store') && !str_contains(strtolower($apiList['headers']), 's-maxage'), 'Authenticated notifications must not enter shared caches.');
 
     $missingCsrf = notifications_request('http://127.0.0.1/api/notifications.php', 'POST', ['action' => 'read-all'], $cookieFile);
     notifications_assert($missingCsrf['status'] === 403, 'Notifications API write did not require CSRF.');
@@ -287,6 +288,7 @@ try {
 
     $page = notifications_request('http://127.0.0.1/index.php?section=notifications&status=all', 'GET', null, $cookieFile);
     notifications_assert($page['status'] === 200 && str_contains($page['body'], 'Centro de actividad') && str_contains($page['body'], 'Notificacion nueva'), 'Notifications page did not render.');
+    notifications_assert(str_contains(strtolower($page['headers']), 'no-store'), 'Authenticated page must not enter shared caches.');
 
     echo "Notifications center: OK\n";
     $exitCode = 0;

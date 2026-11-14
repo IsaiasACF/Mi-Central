@@ -340,8 +340,13 @@ Los assets publicos del layout viven en:
 
 - `public/assets/css/app.css`;
 - `public/assets/js/app.js`.
+- `public/assets/js/polling.js` (ciclo de consultas de estado compartido por video y notificaciones).
 
-No se usa motor de templates, framework frontend, bundler ni CDN.
+No se usa motor de templates, framework frontend ni bundler. Los assets locales pueden aprovechar la cache HTTP del navegador y de Vercel; no se cargan librerias desde CDNs externos.
+
+La cabecera de Notificaciones conserva los datos iniciales del servidor y consulta al abrir la campana o al volver a una pestana visible tras 60 segundos sin actualizar. Solo la pantalla de Notificaciones consulta periodicamente (cada 5 minutos, visible), con una unica peticion que devuelve listado y contador. Las escrituras invalidan lecturas anteriores y actualizan los elementos visibles usando la respuesta del POST.
+
+La politica de consultas, cache publica limitada a `public/assets`, pruebas reproducibles y medicion en Vercel se documenta en [VERCEL_MEMORY.md](VERCEL_MEMORY.md). Las respuestas PHP y archivos privados conservan `no-store`. La conexion PDO tiene un timeout configurable de 5 segundos (`DB_CONNECT_TIMEOUT`, acotado a 1..60); este limite no es un timeout de consultas SQL ni de los trabajos CLI.
 
 ## Autenticacion y administracion de usuarios
 
@@ -902,7 +907,7 @@ La estrategia FFmpeg usa el archivo original como input y genera filtros interno
 
 El progreso real se obtiene desde FFmpeg con `-progress pipe:1` y `-nostats`. El worker parsea `out_time_us` / `out_time_ms`, `out_time`, `speed` y `progress`, calcula `progress_percent` contra `estimated_duration_seconds` y limita el valor a `0..100`. La base se actualiza solo cuando el avance cambia al menos 1% o aproximadamente cada segundo. `completed` queda en 100%; `failed` conserva el ultimo progreso alcanzado.
 
-La interfaz consulta `/api/video/exports.php?video_id=ID` cada 2-3 segundos solo mientras existan jobs `pending` o `processing`; al quedar todos en `completed` o `failed`, detiene el polling. No se usan WebSockets.
+La interfaz consulta `/api/video/exports.php?video_id=ID` cada 2,5 segundos en el editor y cada 3 segundos en Procesamientos solo mientras existan jobs `pending` o `processing` y la pestana este visible; al quedar todos en `completed` o `failed`, detiene el polling. Metadata usa 4 segundos mientras el analisis siga activo. Al regresar a la pestana consulta inmediatamente si quedaba trabajo activo. Los GET tienen un limite de espera de 15 segundos; los errores consecutivos duplican el intervalo hasta 60 segundos y detienen la consulta automatica al quinto fallo. Un boton permite volver a consultar sin recrear el job. Un 401 detiene las consultas de video y notificaciones hasta iniciar sesion y recargar la pagina. No se usan WebSockets.
 
 La descarga segura se sirve desde `/video/export/download.php?id=ID`. El endpoint exige sesion, busca `video_export_jobs.id + user_id`, requiere `status = completed`, resuelve `output_path` desde BD, valida que el `realpath` permanezca dentro de `storage/video/exports` y transmite el MP4 por chunks con `Content-Disposition: attachment`. No acepta rutas, filenames fisicos ni `user_id` desde el navegador.
 

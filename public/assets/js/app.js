@@ -1318,11 +1318,11 @@
     var exportNameInput = editor.querySelector('[data-video-export-name]');
     var exportList = editor.querySelector('[data-video-export-list]');
     var exportCount = editor.querySelector('[data-video-export-count]');
-    var exportPollingTimer = null;
-
     if (!(video instanceof HTMLVideoElement) || !(timeline instanceof HTMLElement) || !(playhead instanceof HTMLElement) || !(markers instanceof HTMLElement) || !(cutList instanceof HTMLElement) || duration <= 0) {
         return;
     }
+
+    var exportPoller = MiCentralPolling.create(fetchExports, 2500, editor, 'Actualizar estado de exportaciones');
 
     function secondsToTimecode(seconds) {
         var milliseconds = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
@@ -1546,15 +1546,7 @@
             options.body = JSON.stringify(Object.assign({action: action}, payload || {}));
         }
 
-        return fetch(url.toString(), options).then(function (response) {
-            return response.json().then(function (body) {
-                if (!response.ok || !body.ok) {
-                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la solicitud.');
-                }
-
-                return body.data;
-            });
-        });
+        return MiCentralPolling.json(url.toString(), options);
     }
 
     function loadCuts() {
@@ -1575,14 +1567,19 @@
         });
     }
 
-    function loadExports() {
+    function fetchExports() {
         if (!(exportList instanceof HTMLElement)) {
+            stopExportPolling();
             return Promise.resolve(null);
         }
 
         return exportApi('list', null, {video_id: videoId}).then(function (data) {
             renderExports(Array.isArray(data) ? data : []);
         });
+    }
+
+    function loadExports() {
+        return exportPoller.refresh();
     }
 
     function setCuts(data) {
@@ -1822,6 +1819,7 @@
             empty.className = 'video-cut-list__empty';
             empty.textContent = 'Aun no has creado exportaciones.';
             exportList.appendChild(empty);
+            stopExportPolling();
             return;
         }
 
@@ -1910,26 +1908,9 @@
         }
     }
 
-    function startExportPolling() {
-        if (exportPollingTimer !== null) {
-            return;
-        }
+    function startExportPolling() { exportPoller.setActive(true); }
 
-        exportPollingTimer = window.setTimeout(function pollExports() {
-            exportPollingTimer = null;
-            loadExports().catch(function (error) {
-                showMessage(error.message, true);
-                startExportPolling();
-            });
-        }, 2500);
-    }
-
-    function stopExportPolling() {
-        if (exportPollingTimer !== null) {
-            window.clearTimeout(exportPollingTimer);
-            exportPollingTimer = null;
-        }
-    }
+    function stopExportPolling() { exportPoller.setActive(false); }
 
     function renderSegments(summary) {
         if (!(segmentList instanceof HTMLElement) || !(segmentStrip instanceof HTMLElement)) {
@@ -2458,8 +2439,6 @@
         });
     }
 
-    window.addEventListener('pagehide', stopExportPolling);
-
     if (playButton) {
         playButton.addEventListener('click', function () {
             if (video.paused) {
@@ -2574,11 +2553,13 @@
     var uploadPending = false;
     var actionPending = false;
     var detailId = page.getAttribute('data-video-detail-id') || '';
-    var pollingTimer = null;
+    var metadataPoller = MiCentralPolling.create(function () {
+        return fetchVideo(detailId).then(renderMetadataPanel);
+    }, 4000, page, 'Actualizar estado del analisis');
     var processedPanel = page.querySelector('[data-video-processed-panel]');
     var processedList = page.querySelector('[data-video-processed-list]');
     var processedCount = page.querySelector('[data-video-processed-count]');
-    var processedPollingTimer = null;
+    var processedPoller = MiCentralPolling.create(fetchProcessedExports, 3000, page, 'Actualizar estado de procesamientos');
     var processedActionPending = false;
 
     function showMessage(text, isError) {
@@ -2887,16 +2868,7 @@
     function jsonApi(url, options) {
         options.credentials = 'same-origin';
         options.headers = Object.assign({Accept: 'application/json'}, options.headers || {});
-
-        return fetch(url, options).then(function (response) {
-            return response.json().then(function (body) {
-                if (!response.ok || !body.ok) {
-                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la solicitud.');
-                }
-
-                return body.data;
-            });
-        });
+        return MiCentralPolling.json(url, options);
     }
 
     function refreshVideos() {
@@ -3156,8 +3128,9 @@
         }
     }
 
-    function loadProcessedExports() {
+    function fetchProcessedExports() {
         if (!(processedList instanceof HTMLElement)) {
+            stopProcessedPolling();
             return Promise.resolve(null);
         }
 
@@ -3167,52 +3140,15 @@
         });
     }
 
-    function stopProcessedPolling() {
-        if (processedPollingTimer !== null) {
-            window.clearTimeout(processedPollingTimer);
-            processedPollingTimer = null;
-        }
-    }
+    function loadProcessedExports() { return processedPoller.refresh(); }
 
-    function startProcessedPolling() {
-        if (!(processedList instanceof HTMLElement) || processedPollingTimer !== null) {
-            return;
-        }
+    function stopProcessedPolling() { processedPoller.setActive(false); }
 
-        processedPollingTimer = window.setTimeout(function pollProcessedExports() {
-            processedPollingTimer = null;
-            loadProcessedExports().catch(function () {
-                startProcessedPolling();
-            });
-        }, 3000);
-    }
+    function startProcessedPolling() { processedPoller.setActive(true); }
 
-    function stopMetadataPolling() {
-        if (pollingTimer !== null) {
-            window.clearTimeout(pollingTimer);
-            pollingTimer = null;
-        }
-    }
+    function stopMetadataPolling() { metadataPoller.setActive(false); }
 
-    function startMetadataPolling() {
-        if (!detailId || pollingTimer !== null) {
-            return;
-        }
-
-        pollingTimer = window.setTimeout(function poll() {
-            pollingTimer = null;
-            fetchVideo(detailId).then(function (video) {
-                renderMetadataPanel(video);
-            }).catch(function () {
-                startMetadataPolling();
-            });
-        }, 4000);
-    }
-
-    window.addEventListener('pagehide', function () {
-        stopMetadataPolling();
-        stopProcessedPolling();
-    });
+    function startMetadataPolling() { metadataPoller.setActive(true); }
 
     if (fileInput instanceof HTMLInputElement) {
         fileInput.addEventListener('change', function () {
@@ -3477,6 +3413,25 @@
         return;
     }
 
+    var page = containers.find(function (container) { return container.hasAttribute('data-notification-page'); });
+    var center = containers.find(function (container) { return container.hasAttribute('data-notification-center'); });
+    var pending = null;
+    var mutationPending = false;
+    var revision = 0;
+    var lastRefresh = new Map();
+    containers.forEach(function (container) { lastRefresh.set(container, Date.now()); });
+
+    function showError(container, error) {
+        var message = container.querySelector('[data-notification-error]');
+        if (!message) {
+            message = document.createElement('p');
+            message.dataset.notificationError = '';
+            message.setAttribute('role', 'status');
+            container.appendChild(message);
+        }
+        message.textContent = error.message;
+    }
+
     function api(container, method, payload, query) {
         var url = container.getAttribute('data-api-url') || '/api/notifications.php';
         var options = {
@@ -3497,15 +3452,7 @@
             options.body = JSON.stringify(payload || {});
         }
 
-        return fetch(url, options).then(function (response) {
-            return response.json().then(function (body) {
-                if (!response.ok || !body.ok) {
-                    throw new Error(body && body.error ? body.error : 'No se pudo procesar la solicitud.');
-                }
-
-                return body.data;
-            });
-        });
+        return MiCentralPolling.json(url, options);
     }
 
     function updateCounters(count) {
@@ -3513,6 +3460,8 @@
             counter.textContent = count > 0 ? String(count) : '';
             counter.hidden = count <= 0;
         });
+        var filter = document.querySelector('[data-notification-unread-filter]');
+        if (filter) { filter.textContent = 'No leidas' + (count > 0 ? ' (' + String(count) + ')' : ''); }
     }
 
     function currentStatus() {
@@ -3617,20 +3566,69 @@
         }
     }
 
-    function refresh(container) {
+    function refresh(container, staleOnly) {
+        if (MiCentralPolling.expired() || mutationPending || document.hidden) { return Promise.resolve(); }
+        if (staleOnly && Date.now() - lastRefresh.get(container) < 60000) { return Promise.resolve(); }
         var query = container.hasAttribute('data-notification-page')
             ? 'status=' + encodeURIComponent(currentStatus()) + '&limit=50'
             : 'limit=5';
-
-        return api(container, 'GET', null, query).then(function (data) {
+        if (pending) {
+            if (pending.container === container && pending.query === query) { return pending.promise; }
+            if (container === center && pending.container === page && pending.query === 'status=all&limit=50') {
+                return pending.promise;
+            }
+            // A different filter/popover waits; it never races the current request.
+            return pending.promise.then(function () { return refresh(container, staleOnly); });
+        }
+        var version = revision;
+        var request = {container: container, query: query};
+        pending = request;
+        request.promise = api(container, 'GET', null, query).then(function (data) {
+            if (version !== revision || mutationPending || MiCentralPolling.expired()) { return; }
+            if (container === page && query !== 'status=' + encodeURIComponent(currentStatus()) + '&limit=50') { return; }
+            var items = Array.isArray(data.items) ? data.items : [];
             updateCounters(Number(data.unread_count || 0));
-            renderList(container, Array.isArray(data.items) ? data.items : []);
+            renderList(container, items);
+            lastRefresh.set(container, Date.now());
+            // Only an unfiltered page contains the same first five items as the bell.
+            if (container === page && currentStatus() === 'all' && center) {
+                renderList(center, items.slice(0, 5));
+                lastRefresh.set(center, Date.now());
+            }
+            var message = container.querySelector('[data-notification-error]');
+            if (message) { message.textContent = ''; }
+        }).catch(function (error) {
+            showError(container, error);
+        }).finally(function () {
+            if (pending === request) { pending = null; }
         });
+        return request.promise;
     }
 
-    function refreshAll() {
+    function applyRead(payload, data) {
+        revision++;
+        updateCounters(Number(data.unread_count || 0));
         containers.forEach(function (container) {
-            refresh(container).catch(function () {});
+            var articles = Array.prototype.slice.call(container.querySelectorAll('[data-notification-id]'));
+            articles.forEach(function (article) {
+                if (payload.action !== 'read-all' && article.getAttribute('data-notification-id') !== String(payload.id)) { return; }
+                if (container === page && currentStatus() === 'unread') {
+                    article.remove();
+                    return;
+                }
+                article.classList.remove('is-unread');
+                article.classList.add('is-read');
+                var button = article.querySelector('[data-notification-action="read"]');
+                if (button) { button.remove(); }
+                Array.prototype.slice.call(article.querySelectorAll('.notification-meta span')).forEach(function (span) {
+                    if (span.textContent === 'No leida') { span.textContent = 'Leida'; }
+                });
+            });
+            var count = container.querySelector('[data-notification-page-count]');
+            var remaining = container.querySelectorAll('[data-notification-id]').length;
+            if (count) { count.textContent = String(remaining); }
+            if (remaining === 0) { renderList(container, []); }
+            lastRefresh.set(container, 0);
         });
     }
 
@@ -3646,7 +3644,7 @@
                 panel.hidden = !open;
 
                 if (open) {
-                    refresh(container).catch(function () {});
+                    refresh(container, false);
                 }
             });
         }
@@ -3660,6 +3658,8 @@
 
             event.preventDefault();
 
+            if (mutationPending || MiCentralPolling.expired()) { return; }
+
             var action = actionTarget.getAttribute('data-notification-action') || '';
             var payload = { action: action };
 
@@ -3668,7 +3668,17 @@
                 payload.id = article ? article.getAttribute('data-notification-id') : '';
             }
 
-            api(container, 'POST', payload, '').then(refreshAll).catch(function () {});
+            mutationPending = true;
+            revision++;
+            actionTarget.disabled = true;
+            api(container, 'POST', payload, '').then(function (data) {
+                applyRead(payload, data);
+            }).catch(function (error) {
+                showError(container, error);
+            }).finally(function () {
+                mutationPending = false;
+                actionTarget.disabled = false;
+            });
         });
     });
 
@@ -3702,7 +3712,18 @@
         });
     });
 
-    window.setInterval(refreshAll, 60000);
+    if (page) {
+        window.setInterval(function () {
+            if (document.hidden === false) { refresh(page, true); }
+        }, 300000);
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden === false) {
+            if (page) { refresh(page, true); }
+            else if (center) { refresh(center, true); }
+        }
+    });
 }());
 
 (function () {

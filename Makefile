@@ -118,6 +118,7 @@ test:
 	docker compose exec web php tests/integration/organization_reminders.php
 	docker compose exec web php tests/integration/reminder_worker.php
 	docker compose exec web php tests/integration/notifications_center.php
+	docker compose exec web php tests/integration/cache_headers.php
 	docker compose exec web php tests/integration/friends_schedule.php
 	docker compose exec web php tests/integration/friends_management.php
 	docker compose exec web php tests/integration/friends_schedule_editor.php
