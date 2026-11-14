@@ -19,6 +19,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:-mi_central}
       DB_PASSWORD: ${DB_PASSWORD:-}
       DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5}
       DB_EMULATE_PREPARES: ${DB_EMULATE_PREPARES:-false}
       DB_SSL_ENABLED: ${DB_SSL_ENABLED:-false}
       DB_SSL_CA: ${DB_SSL_CA:-}
@@ -76,6 +77,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:-mi_central}
       DB_PASSWORD: ${DB_PASSWORD:-}
       DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5}
       DB_EMULATE_PREPARES: ${DB_EMULATE_PREPARES:-false}
       DB_SSL_ENABLED: ${DB_SSL_ENABLED:-false}
       DB_SSL_CA: ${DB_SSL_CA:-}

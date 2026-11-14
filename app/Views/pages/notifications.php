@@ -29,7 +29,7 @@ $url = static function (string $filter): string {
 
     <nav class="quick-filters" aria-label="Filtros de notificaciones">
         <a class="quick-filter<?= $status === 'all' ? ' is-active' : '' ?>" href="<?= View::escape($url('all')) ?>">Todas</a>
-        <a class="quick-filter<?= $status === 'unread' ? ' is-active' : '' ?>" href="<?= View::escape($url('unread')) ?>">No leidas<?= $unreadCount > 0 ? ' (' . View::escape((string) $unreadCount) . ')' : '' ?></a>
+        <a data-notification-unread-filter class="quick-filter<?= $status === 'unread' ? ' is-active' : '' ?>" href="<?= View::escape($url('unread')) ?>">No leidas<?= $unreadCount > 0 ? ' (' . View::escape((string) $unreadCount) . ')' : '' ?></a>
         <a class="quick-filter<?= $status === 'read' ? ' is-active' : '' ?>" href="<?= View::escape($url('read')) ?>">Leidas</a>
     </nav>
 

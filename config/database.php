@@ -18,6 +18,7 @@ return [
     'username' => $env('DB_USERNAME', 'mi_central'),
     'password' => $env('DB_PASSWORD'),
     'charset' => $env('DB_CHARSET', 'utf8mb4'),
+    'connect_timeout' => max(1, min(60, (int) $env('DB_CONNECT_TIMEOUT', '5'))),
     'emulate_prepares' => filter_var($env('DB_EMULATE_PREPARES', 'false'), FILTER_VALIDATE_BOOLEAN),
     'ssl' => [
         'enabled' => filter_var($env('DB_SSL_ENABLED', 'false'), FILTER_VALIDATE_BOOLEAN),

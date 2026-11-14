@@ -30,6 +30,7 @@ $keys = [
     "DB_USERNAME",
     "DB_PASSWORD",
     "DB_CHARSET",
+    "DB_CONNECT_TIMEOUT",
     "SESSION_NAME",
     "SESSION_SECURE",
     "SESSION_IDLE_TIMEOUT",

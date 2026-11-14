@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: private, no-store');
 
 $basePath = dirname(__DIR__, 2);
 $cronSecret = getenv('CRON_SECRET') ?: '';

@@ -11,9 +11,12 @@ RUN printf "date.timezone=America/Santiago\n" > /usr/local/etc/php/conf.d/timezo
     && printf "upload_max_filesize=1024M\npost_max_size=1030M\nmax_file_uploads=20\n" > /usr/local/etc/php/conf.d/uploads.ini
 
 COPY docker/apache/vhost.conf /etc/apache2/sites-available/mi-central.conf
+COPY docker/apache/public-assets.conf /etc/apache2/conf-available/public-assets.conf
 
 RUN a2dissite 000-default.conf \
-    && a2ensite mi-central.conf
+    && a2ensite mi-central.conf \
+    && a2enmod headers \
+    && a2enconf public-assets
 
 WORKDIR /var/www/html
 
